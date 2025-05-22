@@ -11,8 +11,8 @@ class MultiHeadAttention(torch.nn.Module):
         self,
         n_heads: int,
         d_model: int,
-        source_seq_len: int,
-        target_seq_len: int,
+        source_seq_len: int | None = None,
+        target_seq_len: int | None = None,
         q_bias: bool = True,
         k_bias: bool = False,
         v_bias: bool = True,
@@ -43,6 +43,8 @@ class MultiHeadAttention(torch.nn.Module):
         self.source_seq_len = source_seq_len
         self.target_seq_len = target_seq_len
         if self.is_causal:
+            assert source_seq_len is not None
+            assert target_seq_len is not None
             bias = torch.triu(
                 torch.full(
                     (1, 1, target_seq_len, source_seq_len),
@@ -187,6 +189,8 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
         self.register_load_state_dict_post_hook(self.compute_bias)
 
     def compute_bias(self, *args, **kwargs):
+        assert self.source_seq_len is not None
+        assert self.target_seq_len is not None
         bias = self.rp_bias(self.target_seq_len, self.source_seq_len)
         if self.is_causal:
             bias = bias + torch.triu(
