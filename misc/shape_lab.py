@@ -47,7 +47,7 @@ class PerceiverResamplerBlock(nn.Module):
         source = self.source_ln(source)
         latents = latents + self.cross_attn(
             latents,
-            source,
+            torch.cat([source, latents], dim=1),
             attention_mask=attention_mask,
             kv_cache=kv_cache,
         )
@@ -57,14 +57,33 @@ class PerceiverResamplerBlock(nn.Module):
 
 @dataclass
 class EEGDataConfig:
-    # Maximum number of channels used.
-    max_channels: int = 64
+    # N_channels x 3 tensor of electrode positions normalised to [-1, 1]
+    channel_positions: Tensor | None = None
+    # Size of the grid to project electrode positions onto.
+    grid_size: int = 12
     # Maximum sampling rate used.
     max_sr: int = 1000
     # Minimum sampling rate used.
     min_sr: int = 256
     # lowest frequency that the embedding can capture.
     f_min: int = 5
+
+    @property
+    def max_channels(self):
+        assert self.channel_positions is not None
+        return self.channel_positions.shape[0]
+
+    def __post_init__(self):
+        if self.channel_positions is not None:
+            return
+
+        # Create a Cartesian product of a cube with sides of unit length as default electrode positions.
+        step = 1 / self.grid_size
+        points = torch.arange(-1, 1 + step, step)
+        x, y, z = torch.meshgrid(points, points, points, indexing="ij")
+        self.channel_positions = torch.stack(
+            [x.flatten(), y.flatten(), z.flatten()], dim=1
+        )
 
 
 class EEGPerceiverResampler(nn.Module):
@@ -76,11 +95,15 @@ class EEGPerceiverResampler(nn.Module):
         n_heads: int,
         d_mlp: int,
         n_blocks: int,
+        pool_latents: bool = False,
         dropout: float = 0.0,
         scale_exponent: float = -0.25,
     ):
         super().__init__()
         self.d_model = d_model
+        self.channel_positions = data_config.channel_positions
+        self.n_latents = n_latents
+        self.pool_latents = pool_latents
         self.query_latents = nn.Parameter(torch.randn(n_latents, d_model))
         emb_kernel_size = int(data_config.max_sr / data_config.f_min)
         emb_stride = int(data_config.max_sr / data_config.min_sr)
@@ -90,6 +113,7 @@ class EEGPerceiverResampler(nn.Module):
             kernel_size=emb_kernel_size,
             stride=emb_stride,
         )
+        self.embed_positions = nn.Linear(3, d_model)
         self.embed_l_out = lambda T: int((T - emb_kernel_size) / emb_stride + 1)
         self.resampler_blocks = nn.ModuleList(
             [
@@ -112,12 +136,22 @@ class EEGPerceiverResampler(nn.Module):
     ) -> Tensor:
         B, C, T = source.shape
         T_emb = self.embed_l_out(T)
+        pos_emb = (
+            self.embed_positions(self.channel_positions)
+            .unsqueeze(0)
+            .unsqueeze(-1)
+            .expand(B, C, self.d_model, T_emb)
+        )
         source = self.embed(source.reshape(B * C, 1, T)).reshape(
             B, C, self.d_model, T_emb
         )
-        source = source.permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
+        source = (
+            (source + pos_emb).permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
+        )
         latents = (
-            self.query_latents.clone().unsqueeze(0).expand(B * T_emb, 1, self.d_model)
+            self.query_latents.clone()
+            .unsqueeze(0)
+            .expand(B * T_emb, self.n_latents, self.d_model)
         )
         for block in self.resampler_blocks:
             latents = block(
@@ -126,7 +160,10 @@ class EEGPerceiverResampler(nn.Module):
                 attention_mask=attention_mask,
                 kv_cache=kv_cache,
             )
-        return latents.reshape(B, T_emb, self.d_model)
+        if self.pool_latents:
+            return latents.reshape(B, T_emb, self.n_latents, self.d_model).mean(2)
+        else:
+            return latents.reshape(B, T_emb * self.n_latents, self.d_model)
 
 
 def create_mock_eeg(C, T, B):
