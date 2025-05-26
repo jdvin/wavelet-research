@@ -4,16 +4,22 @@ from pathlib import Path
 import sys
 
 file_ids = [
-    # "b69u8",
-    # "yjcqp",
-    # "5evgd",
-    # "6b4tq",
-    # "vxrja",
-    # "bcsm8",
-    # "wftvu",
-    # "xr4f9",
-    "rh28b",
-    "wf2xp",
+    "9hykz",
+    "6rkbf",
+    "ng49t",
+    "9rb78",
+    "2nzby",
+    "jgrn8",
+    "hpv6m",
+    "7cmd4",
+    "y9xfm",
+    "fpvq8",
+    "7hs4g",
+    "4vshm",
+    "pcm5k",
+    "rj2y8",
+    "3ebj9",
+    "p7c9t",
 ]
 
 # URL template for downloads
@@ -23,7 +29,7 @@ file_url = "https://osf.io/{file_id}/download"
 async def download_file(session, file_id):
     """Download a single file asynchronously."""
     url = file_url.format(file_id=file_id)
-    output_file = Path(f"downloaded_{file_id}.dat")
+    output_file = Path(f"/Volumes/T7/datasets/EEGEyeNet/downloaded_{file_id}")
 
     try:
         async with session.get(url) as response:

@@ -80,7 +80,9 @@ class EEGDataConfig:
         # Create a Cartesian product of a cube with sides of unit length as default electrode positions.
         step = 1 / self.grid_size
         points = torch.arange(-1, 1 + step, step)
-        x, y, z = torch.meshgrid(points, points, points, indexing="ij")
+        x, y, z = torch.meshgrid(
+            points, points, points[: len(points) // 4], indexing="ij"
+        )
         self.channel_positions = torch.stack(
             [x.flatten(), y.flatten(), z.flatten()], dim=1
         )
@@ -145,9 +147,11 @@ class EEGPerceiverResampler(nn.Module):
         source = self.embed(source.reshape(B * C, 1, T)).reshape(
             B, C, self.d_model, T_emb
         )
+        breakpoint()
         source = (
             (source + pos_emb).permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
         )
+        breakpoint()
         latents = (
             self.query_latents.clone()
             .unsqueeze(0)
@@ -184,8 +188,16 @@ def main():
     B = 4
     data_config = EEGDataConfig()
     source = create_mock_eeg(data_config.max_channels, T, B)
-    perceiver = EEGPerceiverResampler(data_config, L, D, 8, D * 4, 4)
+    perceiver = EEGPerceiverResampler(
+        data_config,
+        L,
+        D,
+        8,
+        D * 4,
+        4,
+    )
     out = perceiver(source)
+    breakpoint()
     print(out.shape)
 
 
