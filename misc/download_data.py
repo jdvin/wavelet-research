@@ -3,24 +3,28 @@ import aiohttp
 from pathlib import Path
 import sys
 
-file_ids = [
-    "9hykz",
-    "6rkbf",
-    "ng49t",
-    "9rb78",
-    "2nzby",
-    "jgrn8",
-    "hpv6m",
-    "7cmd4",
-    "y9xfm",
-    "fpvq8",
-    "7hs4g",
-    "4vshm",
-    "pcm5k",
-    "rj2y8",
-    "3ebj9",
-    "p7c9t",
-]
+file_ids = {
+    # dots.
+    "9hykz": "dots/test",
+    "6rkbf": "dots/test_short",
+    "ng49t": "dots/train",
+    "9rb78": "dots/val",
+    # movie
+    "2nzby": "movie/test",
+    "jgrn8": "movie/test_short",
+    "hpv6m": "movie/train",
+    "7cmd4": "movie/val",
+    # vss
+    "y9xfm": "vss/test",
+    "fpvq8": "vss/test_short",
+    "7hs4g": "vss/train",
+    "4vshm": "vss/val",
+    # zuco
+    "pcm5k": "zuco/test",
+    "rj2y8": "zuco/test_short",
+    "3ebj9": "zuco/train",
+    "p7c9t": "zuco/val",
+}
 
 # URL template for downloads
 file_url = "https://osf.io/{file_id}/download"
@@ -63,7 +67,7 @@ async def download_all_files():
     async with aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=None)
     ) as session:
-        tasks = [download_file(session, file_id) for file_id in file_ids]
+        tasks = [download_file(session, file_id) for file_id in file_ids.keys()]
         results = await asyncio.gather(*tasks)
 
         successful = sum(1 for r in results if r)

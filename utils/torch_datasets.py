@@ -1,18 +1,18 @@
-from typing import Any
-
+import numpy as np
 from torch.utils.data import Dataset
 
-class ThingsEEGDataset(Dataset):
-    def __init__(self, filepaths: list[str]):
-        self.filepaths = filepaths
-        self.length_map: dict[str, int] = {}
-        for filepath in filepaths:
-            with open(filepath, "r") as f:
-                self.length_map[filepath] = sum(1 for _ in f)
-        
 
-    def _get_line(self, file_index: int, row_index: int) -> dict[str, Any]:
-        """"""
+class EEGEyeNetDataset(Dataset):
+    def __init__(self, dataset_path: str, labels_map: dict[str, int]):
+        self.dataset_path = dataset_path
+        self.labels_map = labels_map
+        self.inputs = np.load(f"{dataset_path}/EEG.npy", mmap_mode="r")
+        self.labels = np.load(f"{dataset_path}/labels.npy", mmap_mode="r")
 
-        with open(self.filepaths[file_index], "r") as f:
-            return {"": 1}          
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, index):
+        return self.inputs[index], [
+            self.labels_map[label.item()] for label in self.labels[index]
+        ]

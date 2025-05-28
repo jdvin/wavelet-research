@@ -52,7 +52,6 @@ def main(
     reset_data_cache: bool,
     is_test_run: bool,
 ):
-
     cfg = TrainingConfig(
         **load_yaml(training_config_path),
         training_config_path=training_config_path,

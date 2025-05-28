@@ -13,6 +13,8 @@ from torch import Tensor
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 from tqdm import tqdm
 
+from utils.torch_datasets import EEGEyeNetDataset
+
 
 class ValidationType(Enum):
     DEFAULT = "default"
@@ -88,6 +90,20 @@ ELECTRODE_ORDER = np.array(
         "AF8",
     ]
 )
+
+
+def extract_eeg_eye_net_ds(
+    root_dir: str,
+    labels_map: dict[str, int] = {
+        "L_saccade": 0,
+        "L_blink": 1,
+        "L_fixation": 2,
+    },
+):
+    return {
+        "train": EEGEyeNetDataset(f"{root_dir}/train/EEG.npy", labels_map),
+        "val": EEGEyeNetDataset(f"{root_dir}/val/EEG.npy", labels_map),
+    }
 
 
 def extract_things_100ms_ds(

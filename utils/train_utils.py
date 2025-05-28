@@ -205,7 +205,7 @@ def get_dataloaders(
             dataset["train"], num_replicas=world_size, rank=rank, shuffle=True
         )
         val_sampler = DistributedSampler(
-            dataset["test"], num_replicas=world_size, rank=rank, shuffle=True
+            dataset["val"], num_replicas=world_size, rank=rank, shuffle=True
         )
     else:
         train_sampler, val_sampler = None, None
@@ -217,7 +217,7 @@ def get_dataloaders(
         collate_fn=collate_fn,
     )
     val_dataloader = DataLoader(
-        dataset["test"],  # type: ignore
+        dataset["val"],  # type: ignore
         batch_size=val_microbatch_size,
         shuffle=val_sampler is None,
         sampler=val_sampler,
