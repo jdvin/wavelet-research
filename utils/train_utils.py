@@ -14,6 +14,11 @@ import numpy as np
 import wandb
 import yaml
 
+from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+
+
 from src.telepath import TelepathTrainer, TelepathConfig
 
 from utils.metrics import MetricManager
@@ -192,6 +197,46 @@ def get_validation_step_indexes(
     return validation_step_indexes
 
 
+def configure_optimizers(
+    parameters,
+    num_batches: int,
+    max_lr: float,
+    weight_decay: float,
+    warmup_frac: float,
+    use_shampoo: bool = False,
+):
+    if use_shampoo:
+        optimizer = DistributedShampoo(
+            parameters(),
+            lr=max_lr,
+            betas=(0.9, 0.999),
+            epsilon=1e-12,
+            weight_decay=weight_decay,
+            max_preconditioner_dim=8192,
+            precondition_frequency=100,
+            use_decoupled_weight_decay=True,
+            grafting_config=AdamGraftingConfig(
+                beta2=0.999,
+                epsilon=1e-08,
+            ),
+        )
+    else:
+        optimizer = AdamW(
+            [p for p in parameters() if p.requires_grad],
+            lr=max_lr,
+            weight_decay=weight_decay,
+        )
+    warmup_batches = int(num_batches * warmup_frac)
+    warmup_scheduler = LinearLR(
+        optimizer, start_factor=1e-7, end_factor=1, total_iters=warmup_batches
+    )
+    decay_scheduler = CosineAnnealingLR(optimizer, T_max=num_batches)
+    scheduler = SequentialLR(
+        optimizer, [warmup_scheduler, decay_scheduler], milestones=[warmup_batches]
+    )
+    return optimizer, scheduler
+
+
 def get_dataloaders(
     dataset: dict[str, np.memmap],
     train_microbatch_size: int,
@@ -249,7 +294,7 @@ def run_eval(
     model.eval()
     val_pbar = tqdm(
         total=len(val_dataloader),
-        desc=f"Running validation.",
+        desc="Running validation.",
         leave=False,
         disable=device not in {0, "cuda:0", "cuda"},
     )

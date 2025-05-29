@@ -22,6 +22,7 @@ from utils.train_utils import (
     run_eval,
     setup,
     cleanup,
+    configure_optimizers,
     load_yaml,
     log_model_details,
     get_microbatch,
@@ -35,7 +36,7 @@ from utils.metrics import (
     MetricManager,
 )
 
-from src.telepath import TelepathConfig, TelepathTrainer, configure_optimizers
+from src.montagenet import MontageNetConfig, MontageNet
 
 
 def main(
@@ -65,7 +66,7 @@ def main(
         checkpoints=checkpoints,
     )
     grad_accum_steps = cfg.batch_size // (cfg.train_micro_batch_size * cfg.world_size)
-    model_config = TelepathConfig(**load_yaml(model_config_path))
+    model_config = MontageNetConfig(**load_yaml(model_config_path))
 
     setup(
         rank=rank,
@@ -81,8 +82,8 @@ def main(
     is_main_process = rank == 0
     logger.info("Creating model instance.")
     # Create model.
-    model_config = TelepathConfig(**load_yaml(model_config_path))
-    model: TelepathTrainer = TelepathTrainer(model_config, rank, world_size)
+    model_config = MontageNetConfig(**load_yaml(model_config_path))
+    model: MontageNet = MontageNet(model_config, rank, world_size)
 
     torch_dtype = {
         "fp32": torch.float32,
@@ -265,13 +266,7 @@ def main(
         if metrics.epoch.value == cfg.num_epochs + 1:
             logger.info("Training complete.")
             break
-        metrics.step.update(1)
-        metrics.microstep.update(1)
-        metrics.temperature.update(model.module.t.item())
-        metrics.bias.update(model.module.b.item())
-        metrics.epoch_step.update((metrics.step.value, steps_per_epoch))
-        metrics.epoch_microstep.update((metrics.microstep.value, len(train_dataloader)))
-        metrics.lr.update(lr_scheduler.get_last_lr()[0])
+        metrics.step_iterators(steps_per_epoch, len(train_dataloader), lr_scheduler)
     cleanup(world_size)
 
 

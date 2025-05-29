@@ -8,8 +8,6 @@ from torch import nn, Tensor, tensor
 from torch.distributed import all_gather_into_tensor
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint_sequential
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import yaml
 
 from src.components.norm import RMSNorm
@@ -22,48 +20,6 @@ from transformers import (
     AutoTokenizer,
     T5ForConditionalGeneration,
 )
-from sentence_transformers import SentenceTransformer
-from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
-
-
-def configure_optimizers(
-    parameters,
-    num_batches: int,
-    max_lr: float,
-    weight_decay: float,
-    warmup_frac: float,
-    use_shampoo: bool = False,
-):
-    if use_shampoo:
-        optimizer = DistributedShampoo(
-            parameters(),
-            lr=max_lr,
-            betas=(0.9, 0.999),
-            epsilon=1e-12,
-            weight_decay=weight_decay,
-            max_preconditioner_dim=8192,
-            precondition_frequency=100,
-            use_decoupled_weight_decay=True,
-            grafting_config=AdamGraftingConfig(
-                beta2=0.999,
-                epsilon=1e-08,
-            ),
-        )
-    else:
-        optimizer = AdamW(
-            [p for p in parameters() if p.requires_grad],
-            lr=max_lr,
-            weight_decay=weight_decay,
-        )
-    warmup_batches = int(num_batches * warmup_frac)
-    warmup_scheduler = LinearLR(
-        optimizer, start_factor=1e-7, end_factor=1, total_iters=warmup_batches
-    )
-    decay_scheduler = CosineAnnealingLR(optimizer, T_max=num_batches)
-    scheduler = SequentialLR(
-        optimizer, [warmup_scheduler, decay_scheduler], milestones=[warmup_batches]
-    )
-    return optimizer, scheduler
 
 
 @dataclass
@@ -493,7 +449,6 @@ class RelativePositionTransformer(nn.Module):
         cross_attn: bool,
         is_causal: bool,
     ):
-
         d_n = cls(
             n_vocab=config.text_encoder_vocab_size,
             source_n_ctx=config.text_encoder_block_size,

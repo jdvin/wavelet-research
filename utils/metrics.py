@@ -171,6 +171,17 @@ def get_accuracy_contrastive(out: Mapping[str, Tensor]) -> Tensor:
     )
 
 
+def get_accuracy_simple(out: Mapping[str, Tensor]) -> Tensor:
+    logits, labels = out["logits"], out["labels"]
+    return torch.tensor(
+        [
+            labels.argmax(dim=1) == logits,
+            labels.shape[0],
+        ],
+        device=logits.device,
+    )
+
+
 def get_average_logits_for_label(out: dict[str, Tensor], label: int) -> Tensor:
     logits, labels = out["logits"], out["labels"]
     mask = labels == label
@@ -326,18 +337,6 @@ class MetricManager:
             device=device,
             world_size=world_size,
         )
-        self.temperature = Metric(
-            "train/temperature",
-            0,
-            device=device,
-            world_size=world_size,
-        )
-        self.bias = Metric(
-            "train/bias",
-            0,
-            device=device,
-            world_size=world_size,
-        )
         self.val_loss = Metric(
             "val/loss",
             tensor([0.0]),
@@ -346,31 +345,11 @@ class MetricManager:
             world_size=world_size,
         )
         self.val_accuracy = Metric(
-            f"val/accuracy@{batch_size}",
+            "val/accuracy",
             tensor([0.0]),
-            transform_fn=get_accuracy_contrastive,
+            transform_fn=get_accuracy_simple,
             reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
             compute_fn=divide,
-            log_every_step=False,
-            device=device,
-            world_size=world_size,
-        )
-        self.val_positive_logits = Metric(
-            "val/positive_logits_mean",
-            tensor(0.0),
-            transform_fn=get_average_positive_logits,
-            compute_fn=divide,
-            reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
-            log_every_step=False,
-            device=device,
-            world_size=world_size,
-        )
-        self.val_negative_logits = Metric(
-            "val/negative_logits_mean",
-            tensor(0.0),
-            transform_fn=get_average_negative_logits,
-            compute_fn=divide,
-            reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
             log_every_step=False,
             device=device,
             world_size=world_size,
@@ -387,3 +366,10 @@ class MetricManager:
 
         if self.is_main_process:
             wandb.log({}, commit=True)
+
+    def step_iterators(self, steps_per_epoch: int, num_microbatches: int, lr_scheduler):
+        self.step.update(1)
+        self.microstep.update(1)
+        self.epoch_step.update((self.step.value, steps_per_epoch))
+        self.epoch_microstep.update((self.microstep.value, num_microbatches))
+        self.lr.update(lr_scheduler.get_last_lr()[0])
