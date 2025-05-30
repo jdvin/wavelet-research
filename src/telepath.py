@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import math
 import numpy as np
 import torch
-import pandas as pd
 from tqdm import tqdm
 from torch import nn, Tensor, tensor
 from torch.distributed import all_gather_into_tensor

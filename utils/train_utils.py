@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from collections import defaultdict
 import math
@@ -8,7 +9,7 @@ from datetime import timedelta
 
 from loguru import logger
 import torch
-from torch.utils.data import DataLoader, Sampler, DistributedSampler
+from torch.utils.data import DataLoader, Dataset, Sampler, DistributedSampler
 from tqdm import tqdm
 import numpy as np
 import wandb
@@ -19,8 +20,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 
-from src.telepath import TelepathTrainer, TelepathConfig
-
+from src.montagenet import MontageNet, MontageNetConfig
 from utils.metrics import MetricManager
 
 
@@ -105,7 +105,7 @@ def setup(
     run_name: str,
     checkpoints: bool,
     training_config: TrainingConfig,
-    model_config: TelepathConfig,
+    model_config: MontageNetConfig,
 ):
     """Setup the environment for training."""
     torch.manual_seed(42 + rank)
@@ -238,7 +238,7 @@ def configure_optimizers(
 
 
 def get_dataloaders(
-    dataset: dict[str, np.memmap],
+    dataset: dict[str, Dataset],
     train_microbatch_size: int,
     val_microbatch_size: int,
     rank: int,
@@ -283,7 +283,7 @@ def get_dataloader_iterator(
 
 @torch.no_grad()
 def run_eval(
-    model: TelepathTrainer,
+    model: MontageNet,
     val_dataloader: DataLoader,
     val_sampler: Sampler | None,
     metrics: MetricManager,

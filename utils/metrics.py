@@ -5,9 +5,7 @@ from functools import partial
 from enum import Enum
 from typing import Any, Callable, Mapping
 
-from transformers.trainer_utils import is_main_process
 
-import pandas as pd
 import torch
 from torch import Tensor, tensor
 from torch.distributed import (
@@ -19,16 +17,16 @@ from torch.distributed import (
 import wandb
 
 THINGS_CONCEPTS_PATH = "data/things_concepts.csv"
-SYNONYM_MAP = {
-    object_word.lower().strip(): [
-        synonym.lower().replace("_", " ").strip()
-        for synonym in synonyms.split(",")
-        if synonym.lower().replace("_", " ").strip() != object_word.lower().strip()
-    ]
-    for object_word, synonyms in pd.read_csv(THINGS_CONCEPTS_PATH)[
-        ["Word", "WordNet Synonyms"]
-    ].values
-}
+# SYNONYM_MAP = {
+#     object_word.lower().strip(): [
+#         synonym.lower().replace("_", " ").strip()
+#         for synonym in synonyms.split(",")
+#         if synonym.lower().replace("_", " ").strip() != object_word.lower().strip()
+#     ]
+#     for object_word, synonyms in pd.read_csv(THINGS_CONCEPTS_PATH)[
+#         ["Word", "WordNet Synonyms"]
+#     ].values
+# }
 
 
 class MetricLogType(Enum):

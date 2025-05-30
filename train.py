@@ -10,11 +10,13 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as torch_mp
 from torch.amp.autocast_mode import autocast
-from torch.cuda.amp.grad_scaler import GradScaler
+from torch.amp.grad_scaler import GradScaler
 from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
-import pandas as pd
-from utils.data_utils import extract_things_100ms_ds, get_collate_fn
+from utils.data_utils import (
+    extract_eeg_eye_net_ds,
+    eeg_eye_net_collate_fn,
+)
 
 from pytorch_memlab import MemReporter
 
@@ -101,22 +103,16 @@ def main(
     # This is probably quite a strange pattern, but it is the simplest way to implement this behaviour.
     # TODO: Distributed dataset creation.
     if is_main_process:
-        ds = extract_things_100ms_ds(
+        ds = extract_eeg_eye_net_ds(
             root_dir=cfg.dataset_path,
-            subjects=cfg.subjects,
-            reset_cache=reset_data_cache,
-            is_test_run=is_test_run,
         )
         dist.barrier()
     else:
         dist.barrier()
-        ds = extract_things_100ms_ds(root_dir=cfg.dataset_path, subjects=cfg.subjects)
-    collate_fn = get_collate_fn(
-        model.module.tokenizer,
-        model_config.text_encoder_stop_token,
-        model_config.text_encoder_stop_token,
-        get_spectrogram=False,
-    )
+        ds = extract_eeg_eye_net_ds(
+            root_dir=cfg.dataset_path,
+        )
+
     logger.info("Creating data loaders.")
     # Create data loaders.
     (
@@ -125,12 +121,12 @@ def main(
         val_dataloader,
         val_sampler,
     ) = get_dataloaders(
-        ds,
+        ds,  # type: ignore
         cfg.train_micro_batch_size,
         cfg.val_micro_batch_size,
         rank,
         world_size,
-        collate_fn,
+        eeg_eye_net_collate_fn,
     )
     # Steps per epoch is the number of batches in the training set.
     steps_per_epoch = math.ceil(len(train_dataloader) / grad_accum_steps)
@@ -144,7 +140,7 @@ def main(
         if cfg.dtype == "fp32"
         else autocast(device_type=device_type, dtype=torch_dtype)
     )
-    scaler = GradScaler(enabled=cfg.dtype == "fp16")
+    scaler = GradScaler(device=device_type, enabled=cfg.dtype == "fp16")
 
     logger.info("Creating optimizer.")
 
@@ -281,8 +277,6 @@ if __name__ == "__main__":
     parser.add_argument("--model-config-path", type=str, default=None)
     parser.add_argument("--world-size", type=int, default=1)
     parser.add_argument("--checkpoints", action="store_true", default=False)
-    parser.add_argument("--reset-data-cache", action="store_true", default=False)
-    parser.add_argument("--is-test-run", action="store_true", default=False)
 
     args = parser.parse_args()
     if args.world_size == 1:

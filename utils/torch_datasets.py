@@ -12,7 +12,7 @@ class EEGEyeNetDataset(Dataset):
     def __len__(self):
         return len(self.labels)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index) -> tuple[np.memmap, list[int]]:
         return self.inputs[index], [
             self.labels_map[label.item()] for label in self.labels[index]
         ]

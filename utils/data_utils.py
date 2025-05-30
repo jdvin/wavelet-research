@@ -7,10 +7,8 @@ from torch.utils.data import Dataset
 
 from loguru import logger
 import numpy as np
-import pandas as pd
 import torch
 from torch import Tensor
-from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 from tqdm import tqdm
 
 from utils.torch_datasets import EEGEyeNetDataset
@@ -282,8 +280,17 @@ def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
     return stft[:, 1:, :-1].abs() ** 2
 
 
-def get_collate_fn(
-    tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
+def eeg_eye_net_collate_fn(
+    samples: list[tuple[np.memmap, list[int]]]
+) -> dict[str, torch.Tensor]:
+    return {
+        "input_features": torch.tensor([sample[0] for sample in samples]),
+        "labels": torch.tensor([sample[1] for sample in samples]),
+    }
+
+
+def get_things_100ms_collate_fn(
+    tokenizer: Any,
     stop_token_id: int,
     pad_token_id: int,
     get_spectrogram: bool,
