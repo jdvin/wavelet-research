@@ -99,8 +99,8 @@ def extract_eeg_eye_net_ds(
     },
 ):
     return {
-        "train": EEGEyeNetDataset(f"{root_dir}/train/EEG.npy", labels_map),
-        "val": EEGEyeNetDataset(f"{root_dir}/val/EEG.npy", labels_map),
+        "train": EEGEyeNetDataset(os.path.join(root_dir, "train"), labels_map),
+        "val": EEGEyeNetDataset(os.path.join(root_dir, "val"), labels_map),
     }
 
 

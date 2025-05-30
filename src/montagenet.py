@@ -64,9 +64,9 @@ class EEGDataConfig:
         default_factory=lambda: torch.tensor(
             [
                 pos
-                for _, pos in mne.channels.make_standard_montage(
-                    "GSN-HydroCel-129"
-                ).get_positions()["ch_pos"]
+                for _, pos in mne.channels.make_standard_montage("GSN-HydroCel-129")
+                .get_positions()["ch_pos"]
+                .items()
             ]
         )
     )
@@ -97,7 +97,7 @@ class EEGPerceiverResampler(nn.Module):
     ):
         super().__init__()
         self.d_model = d_model
-        self.channel_positions = data_config.channel_positions
+        self.register_buffer("channel_positions", data_config.channel_positions)
         self.n_latents = n_latents
         self.pool_latents = pool_latents
         self.query_latents = nn.Parameter(torch.randn(n_latents, d_model))
@@ -108,6 +108,7 @@ class EEGPerceiverResampler(nn.Module):
             out_channels=d_model,
             kernel_size=emb_kernel_size,
             stride=emb_stride,
+            padding="same",
         )
         self.embed_positions = nn.Linear(3, d_model)
         self.embed_l_out = lambda T: int((T - emb_kernel_size) / emb_stride + 1)
@@ -130,8 +131,8 @@ class EEGPerceiverResampler(nn.Module):
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
-        B, C, T = source.shape
-        T_emb = self.embed_l_out(T)
+        B, T, C = source.shape
+        T_emb = T  # self.embed_l_out(T)
         pos_emb = (
             self.embed_positions(self.channel_positions)
             .unsqueeze(0)
@@ -164,6 +165,7 @@ class EEGPerceiverResampler(nn.Module):
 
 @dataclass
 class MontageNetConfig:
+    data_config: EEGDataConfig = field(default_factory=EEGDataConfig)
     n_latents: int = 1
     d_model: int = 1024
     n_heads: int = 8
@@ -172,43 +174,38 @@ class MontageNetConfig:
     scale_exponent: float = -0.25
     pool_latents: bool = False
     n_blocks: int = 4
+    n_classes: int = 3
 
 
 class MontageNet(nn.Module):
     def __init__(
         self,
-        data_config: EEGDataConfig,
-        n_latents: int,
-        n_classes: int,
-        d_model: int,
-        n_heads: int,
-        d_mlp: int,
-        n_blocks: int,
-        dropout: float = 0.0,
-        scale_exponent: float = -0.25,
+        config: MontageNetConfig,
+        rank: int,
+        world_size: int,
     ):
         super().__init__()
-        self.n_latents = n_latents
-        self.d_model = d_model
+        self.n_latents = config.n_latents
+        self.d_model = config.d_model
         self.encoder = EEGPerceiverResampler(
-            data_config,
-            n_latents,
-            d_model,
-            n_heads,
-            d_mlp,
-            n_blocks,
+            config.data_config,
+            config.n_latents,
+            config.d_model,
+            config.n_heads,
+            config.d_mlp,
+            config.n_blocks,
             False,
-            dropout,
-            scale_exponent,
+            config.dropout,
+            config.scale_exponent,
         )
 
-        self.head = nn.Conv1d(d_model * n_latents, n_classes, 1)
+        self.head = nn.Conv1d(config.d_model * config.n_latents, config.n_classes, 1)
 
     def forward(
         self,
         x: Tensor,
     ):
-        B, _, T = x.shape
+        B, T, C = x.shape
         latents = self.encoder(x).reshape(B, self.n_latents * self.d_model, T)
         return self.head(latents)
 

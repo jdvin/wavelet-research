@@ -51,8 +51,6 @@ class TrainingConfig:
     model_config_path: str
     checkpoints: bool
     dataset_path: str
-    subjects: list[int]
-    things_metadata_path: str
     num_epochs: int
     batch_size: int
     train_micro_batch_size: int
@@ -85,11 +83,13 @@ def get_microbatch(
         k: (
             v.pin_memory().to(
                 device=device,
-                dtype=dtype if v.dtype == torch.float32 else torch.long,
+                dtype=dtype if torch.is_floating_point(v) else torch.long,
                 non_blocking=True,
             )
             if isinstance(device, int)
-            else v.to(device=device)
+            else v.to(
+                device=device, dtype=dtype if torch.is_floating_point(v) else torch.long
+            )
         )
         for k, v in micro_batch.items()
         if isinstance(v, torch.Tensor)

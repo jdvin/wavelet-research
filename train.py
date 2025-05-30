@@ -52,8 +52,6 @@ def main(
     eval_first: bool,
     device: str,
     checkpoints: bool,
-    reset_data_cache: bool,
-    is_test_run: bool,
 ):
     cfg = TrainingConfig(
         **load_yaml(training_config_path),
@@ -94,6 +92,7 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
+    assert len({param.device for param in model.parameters()}) == 1
     log_model_details(model)
     # reporter = MemReporter(model)
     if world_size > 1:
@@ -106,7 +105,8 @@ def main(
         ds = extract_eeg_eye_net_ds(
             root_dir=cfg.dataset_path,
         )
-        dist.barrier()
+        if world_size > 1:
+            dist.barrier()
     else:
         dist.barrier()
         ds = extract_eeg_eye_net_ds(
@@ -174,7 +174,6 @@ def main(
     )
     # logger.debug("====Post Init====")
     # reporter.report(device=rank)
-    dist.barrier()
     if eval_first:
         run_eval(
             model=model.module,
@@ -294,8 +293,6 @@ if __name__ == "__main__":
                 args.eval_first,
                 args.device,
                 args.checkpoints,
-                args.reset_data_cache,
-                args.is_test_run,
             ),
             nprocs=args.world_size,
             join=True,
