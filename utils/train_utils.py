@@ -301,21 +301,19 @@ def run_eval(
     val_dataloader_iterator = get_dataloader_iterator(
         val_dataloader, val_sampler, metrics.epoch.value
     )
-    loss = torch.tensor([0])
+    accum_loss = torch.tensor([0.0], device=device)
     for _ in range(len(val_dataloader)):
         micro_batch = get_microbatch(val_dataloader_iterator, device, dtype)
         loss, logits, labels = model.step(micro_batch)
-        loss += loss / len(val_dataloader)
+        accum_loss += loss.item() / len(val_dataloader)
 
         val_pbar.update()
         out = {"logits": logits, "labels": labels}
         metrics.val_accuracy.update(out)
-        metrics.val_positive_logits.update(out)
-        metrics.val_negative_logits.update(out)
     metrics.val_accuracy.log()
-    metrics.val_positive_logits.log()
-    metrics.val_negative_logits.log()
 
-    metrics.val_loss.update(loss)
+    metrics.val_loss.update(accum_loss)
     metrics.val_loss.log()
+    del accum_loss
+    torch.cuda.empty_cache()
     model.train()

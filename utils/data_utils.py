@@ -93,9 +93,9 @@ ELECTRODE_ORDER = np.array(
 def extract_eeg_eye_net_ds(
     root_dir: str,
     labels_map: dict[str, int] = {
-        "L_saccade": 0,
-        "L_blink": 1,
-        "L_fixation": 2,
+        "saccade": 0,
+        "blink": 1,
+        "fixation": 2,
     },
 ):
     return {

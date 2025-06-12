@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 from torch import nn
 from torch.nn import functional as F
-
+from rotary_embedding_torch import RotaryEmbedding
 from .pos import RelativePositionBias
 
 
@@ -13,6 +13,7 @@ class MultiHeadAttention(torch.nn.Module):
         d_model: int,
         source_seq_len: int | None = None,
         target_seq_len: int | None = None,
+        rotary_embedding: RotaryEmbedding | None = None,
         q_bias: bool = True,
         k_bias: bool = False,
         v_bias: bool = True,
@@ -31,6 +32,7 @@ class MultiHeadAttention(torch.nn.Module):
         self.is_causal = is_causal
         assert scale
         self.scale = scale
+        self.rotary_embedding = rotary_embedding
         # The projectons are scalled differently in the original whisper implementation
         self.q_proj = nn.Linear(d_model, d_model, bias=q_bias)
         self.k_proj = nn.Linear(d_model, d_model, bias=k_bias)
@@ -136,6 +138,9 @@ class MultiHeadAttention(torch.nn.Module):
             )
             if bias is not None:
                 attention_mask = attention_mask + bias
+        if self.rotary_embedding is not None:
+            q = self.rotary_embedding.rotate_queries_or_keys(q, offset=T_cached)
+            k = self.rotary_embedding.rotate_queries_or_keys(k)
         y = self.qkv_attention(
             q,
             k,

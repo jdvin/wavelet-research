@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=2.2.6",
     "osfclient>=0.0.5",
     "pytorch-memlab>=0.3.0",
+    "rotary-embedding-torch>=0.8.6",
     "torch>=2.7.0",
     "wandb>=0.19.11",
 ]

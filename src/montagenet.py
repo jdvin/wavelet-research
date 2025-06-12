@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 import mne
+from rotary_embedding_torch import RotaryEmbedding
 
 from src.components.norm import RMSNorm
 from src.components.attention import MultiHeadAttention
@@ -17,16 +18,17 @@ class PerceiverResamplerBlock(nn.Module):
         d_model: int,
         n_heads: int,
         d_mlp: int,
+        rotary_embedding: RotaryEmbedding,
         dropout: float = 0.0,
         scale_exponent: float = -0.25,
     ):
         super().__init__()
-
         self.cross_attn = MultiHeadAttention(
             n_heads,
             d_model,
             scale=(d_model // n_heads) ** scale_exponent,
             k_bias=True,
+            rotary_embedding=rotary_embedding,
             dropout=dropout,
         )
         self.source_ln = RMSNorm(d_model)
@@ -112,12 +114,14 @@ class EEGPerceiverResampler(nn.Module):
         )
         self.embed_positions = nn.Linear(3, d_model)
         self.embed_l_out = lambda T: int((T - emb_kernel_size) / emb_stride + 1)
+        rotary_embedding = RotaryEmbedding(dim=32, cache_max_seq_len=512)
         self.resampler_blocks = nn.ModuleList(
             [
                 PerceiverResamplerBlock(
                     d_model,
                     n_heads,
                     d_mlp,
+                    rotary_embedding,
                     dropout,
                     scale_exponent,
                 )
@@ -198,7 +202,6 @@ class MontageNet(nn.Module):
             config.dropout,
             config.scale_exponent,
         )
-
         self.head = nn.Conv1d(config.d_model * config.n_latents, config.n_classes, 1)
 
     def forward(

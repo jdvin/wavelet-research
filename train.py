@@ -50,6 +50,7 @@ def main(
     run_group: str,
     run_name: str,
     eval_first: bool,
+    test_run: bool,
     device: str,
     checkpoints: bool,
 ):
@@ -196,7 +197,7 @@ def main(
         # torch.cuda.memory._record_memory_history()
         with ddp_context:
             with scaler_context:
-                loss, _, _ = model.module.step(micro_batch)
+                loss, logits, labels = model.module.step(micro_batch)
                 # logger.debug("====Forward Pass====")
                 # reporter.report()
                 loss = loss / grad_accum_steps
@@ -207,7 +208,7 @@ def main(
                 micro_batch = get_microbatch(
                     train_dataloader_iterator, rank, torch_dtype
                 )
-            scaler.scale(loss).backward(retain_graph=True)  # type: ignore
+            scaler.scale(loss).backward()  # type: ignore
 
         # torch.cuda.memory._dump_snapshot("new_snapshot.pickle")
         # break
@@ -227,9 +228,11 @@ def main(
         scaler.step(optim)
         scaler.update()
         optim.zero_grad(set_to_none=True)
+        del loss, logits, labels
+        torch.cuda.empty_cache()
         lr_scheduler.step()
         train_pbar.update()
-        if metrics.epoch_step.value in validation_step_indexes:
+        if metrics.epoch_step.value in validation_step_indexes or test_run:
             run_eval(
                 model=model.module,
                 val_dataloader=val_dataloader,
@@ -271,6 +274,7 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, required=True)
     parser.add_argument("--run-group", type=str, required=True)
     parser.add_argument("--eval-first", action="store_true")
+    parser.add_argument("--test-run", action="store_true")
     parser.add_argument("--device", type=str)
     parser.add_argument("--training-config-path", type=str, default=None)
     parser.add_argument("--model-config-path", type=str, default=None)
@@ -291,6 +295,7 @@ if __name__ == "__main__":
                 args.run_group,
                 args.run_name,
                 args.eval_first,
+                args.test_run,
                 args.device,
                 args.checkpoints,
             ),

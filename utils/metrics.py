@@ -173,7 +173,7 @@ def get_accuracy_simple(out: Mapping[str, Tensor]) -> Tensor:
     logits, labels = out["logits"], out["labels"]
     return torch.tensor(
         [
-            labels.argmax(dim=1) == logits,
+            (logits.argmax(dim=1) == labels).sum(),
             labels.shape[0],
         ],
         device=logits.device,

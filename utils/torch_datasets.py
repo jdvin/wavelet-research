@@ -15,5 +15,5 @@ class EEGEyeNetDataset(Dataset):
 
     def __getitem__(self, index) -> tuple[np.memmap, list[int]]:
         return self.inputs[index], [
-            self.labels_map[label.item()] for label in self.labels[index]
+            self.labels_map[label.item().split("_")[1]] for label in self.labels[index]
         ]

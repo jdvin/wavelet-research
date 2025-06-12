@@ -250,6 +250,15 @@ wheels = [
 ]
 
 [[package]]
+name = "einops"
+version = "0.8.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e5/81/df4fbe24dff8ba3934af99044188e20a98ed441ad17a274539b74e82e126/einops-0.8.1.tar.gz", hash = "sha256:de5d960a7a761225532e0f1959e5315ebeafc0cd43394732f103ca44b9837e84", size = 54805 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/62/9773de14fe6c45c23649e98b83231fffd7b9892b6cf863251dc2afa73643/einops-0.8.1-py3-none-any.whl", hash = "sha256:919387eb55330f5757c6bea9165c5ff5cfe63a642682ea788a6d472576d81737", size = 64359 },
+]
+
+[[package]]
 name = "executing"
 version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1312,6 +1321,19 @@ wheels = [
 ]
 
 [[package]]
+name = "rotary-embedding-torch"
+version = "0.8.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "einops" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a9/fd/00a8b8f5d3e6aafbd10d76ea2cd64529a6d98e6daf2485722bf63836294c/rotary_embedding_torch-0.8.6.tar.gz", hash = "sha256:691753c846b87f719a6a1394bd5a16137b8f8b57c1bccb2dff2975f6bb142a6c", size = 7279 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7d/5f/f6e4bbc9819e525c48cf8a3c2aca02ef79b8cbf1816be93d2d5167ba6a17/rotary_embedding_torch-0.8.6-py3-none-any.whl", hash = "sha256:1e92c09401af861dca768026af771885d51309ddf13a6028fce53e11801016de", size = 5616 },
+]
+
+[[package]]
 name = "scipy"
 version = "1.15.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1620,6 +1642,7 @@ dependencies = [
     { name = "numpy" },
     { name = "osfclient" },
     { name = "pytorch-memlab" },
+    { name = "rotary-embedding-torch" },
     { name = "torch" },
     { name = "wandb" },
 ]
@@ -1633,6 +1656,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "osfclient", specifier = ">=0.0.5" },
     { name = "pytorch-memlab", specifier = ">=0.3.0" },
+    { name = "rotary-embedding-torch", specifier = ">=0.8.6" },
     { name = "torch", specifier = ">=2.7.0" },
     { name = "wandb", specifier = ">=0.19.11" },
 ]
