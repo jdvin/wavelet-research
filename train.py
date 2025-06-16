@@ -15,7 +15,8 @@ from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 from utils.data_utils import (
     extract_eeg_eye_net_ds,
-    eeg_eye_net_collate_fn,
+    get_eeg_eye_net_collate_fn,
+    get_nth_mask,
 )
 
 from pytorch_memlab import MemReporter
@@ -115,6 +116,10 @@ def main(
         )
 
     logger.info("Creating data loaders.")
+    train_mask = get_nth_mask(129, 2, 1)
+    val_mask = get_nth_mask(129, 2, 2)
+    train_collate_fn = get_eeg_eye_net_collate_fn(mask=train_mask)
+    val_collate_fn = get_eeg_eye_net_collate_fn(mask=val_mask)
     # Create data loaders.
     (
         train_dataloader,
@@ -127,7 +132,8 @@ def main(
         cfg.val_micro_batch_size,
         rank,
         world_size,
-        eeg_eye_net_collate_fn,
+        train_collate_fn,
+        val_collate_fn,
     )
     # Steps per epoch is the number of batches in the training set.
     steps_per_epoch = math.ceil(len(train_dataloader) / grad_accum_steps)
@@ -219,6 +225,7 @@ def main(
                 (metrics.microstep.value, len(train_dataloader))
             )
             continue
+
         if cfg.grad_clip > 0:
             scaler.unscale_(optim)
             metrics.train_gradnorm.update(
@@ -229,10 +236,10 @@ def main(
         scaler.update()
         optim.zero_grad(set_to_none=True)
         del loss, logits, labels
-        torch.cuda.empty_cache()
         lr_scheduler.step()
         train_pbar.update()
         if metrics.epoch_step.value in validation_step_indexes or test_run:
+            torch.cuda.empty_cache()
             run_eval(
                 model=model.module,
                 val_dataloader=val_dataloader,

@@ -280,13 +280,28 @@ def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
     return stft[:, 1:, :-1].abs() ** 2
 
 
-def eeg_eye_net_collate_fn(
-    samples: list[tuple[np.memmap, list[int]]]
-) -> dict[str, torch.Tensor]:
-    return {
-        "input_features": torch.tensor([sample[0] for sample in samples]),
-        "labels": torch.tensor([sample[1] for sample in samples]),
-    }
+def get_nth_mask(size: int, n: int, offset: int = 1) -> torch.Tensor:
+    mask = torch.ones(size)
+    mask[offset - 1 :: n] = False
+    return mask.unsqueeze(0).unsqueeze(0)
+
+
+def get_eeg_eye_net_collate_fn(
+    mask: torch.Tensor | None = None,
+):
+    def eeg_eye_net_collate_fn(
+        samples: list[tuple[np.memmap, list[int]]]
+    ) -> dict[str, torch.Tensor]:
+        # TODO: This is slow AF and should definitely be done on the GPU.
+        input_features_tensor = torch.tensor([sample[0] for sample in samples])
+        return {
+            "input_features": input_features_tensor * mask
+            if mask is not None
+            else input_features_tensor,
+            "labels": torch.tensor([sample[1] for sample in samples]),
+        }
+
+    return eeg_eye_net_collate_fn
 
 
 def get_things_100ms_collate_fn(

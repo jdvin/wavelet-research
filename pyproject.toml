@@ -10,9 +10,12 @@ dependencies = [
     "loguru>=0.7.3",
     "mne>=1.9.0",
     "numpy>=2.2.6",
+    "numpy-stl>=3.2.0",
     "osfclient>=0.0.5",
+    "plotly>=6.1.2",
     "pytorch-memlab>=0.3.0",
     "rotary-embedding-torch>=0.8.6",
+    "stl>=0.0.3",
     "torch>=2.7.0",
     "wandb>=0.19.11",
 ]

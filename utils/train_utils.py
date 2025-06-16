@@ -243,7 +243,8 @@ def get_dataloaders(
     val_microbatch_size: int,
     rank: int,
     world_size: int,
-    collate_fn: Callable[[list], dict],
+    train_collate_fn: Callable[[list], dict],
+    val_collate_fn: Callable[[list], dict],
 ) -> tuple[DataLoader, Sampler | None, DataLoader, Sampler | None]:
     if world_size > 1:
         train_sampler = DistributedSampler(
@@ -259,14 +260,14 @@ def get_dataloaders(
         batch_size=train_microbatch_size,
         shuffle=train_sampler is None,
         sampler=train_sampler,
-        collate_fn=collate_fn,
+        collate_fn=train_collate_fn,
     )
     val_dataloader = DataLoader(
         dataset["val"],  # type: ignore
         batch_size=val_microbatch_size,
         shuffle=val_sampler is None,
         sampler=val_sampler,
-        collate_fn=collate_fn,
+        collate_fn=val_collate_fn,
     )
     return train_dataloader, train_sampler, val_dataloader, val_sampler
 

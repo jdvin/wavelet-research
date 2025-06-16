@@ -4,7 +4,11 @@ from torch.utils.data import Dataset
 
 
 class EEGEyeNetDataset(Dataset):
-    def __init__(self, dataset_path: str, labels_map: dict[str, int]):
+    def __init__(
+        self,
+        dataset_path: str,
+        labels_map: dict[str, int],
+    ):
         self.dataset_path = dataset_path
         self.labels_map = labels_map
         self.inputs = np.load(os.path.join(dataset_path, "EEG.npy"), mmap_mode="r")

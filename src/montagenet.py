@@ -18,7 +18,7 @@ class PerceiverResamplerBlock(nn.Module):
         d_model: int,
         n_heads: int,
         d_mlp: int,
-        rotary_embedding: RotaryEmbedding,
+        rotary_embedding: RotaryEmbedding | None,
         dropout: float = 0.0,
         scale_exponent: float = -0.25,
     ):
@@ -121,7 +121,7 @@ class EEGPerceiverResampler(nn.Module):
                     d_model,
                     n_heads,
                     d_mlp,
-                    rotary_embedding,
+                    None,  # rotary_embedding,
                     dropout,
                     scale_exponent,
                 )
@@ -136,6 +136,8 @@ class EEGPerceiverResampler(nn.Module):
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
         B, T, C = source.shape
+        # perm = torch.randperm(C)
+        # source = source[..., perm]
         T_emb = T  # self.embed_l_out(T)
         pos_emb = (
             self.embed_positions(self.channel_positions)
@@ -143,12 +145,13 @@ class EEGPerceiverResampler(nn.Module):
             .unsqueeze(-1)
             .expand(B, C, self.d_model, T_emb)
         )
-        source = self.embed(source.reshape(B * C, 1, T)).reshape(
-            B, C, self.d_model, T_emb
-        )
+        # source = self.embed(source.reshape(B * C, 1, T)).reshape(
+        #     B, C, self.d_model, T_emb
+        # )
         source = (
             (source + pos_emb).permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
         )
+        source = source.permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
         latents = (
             self.query_latents.clone()
             .unsqueeze(0)
