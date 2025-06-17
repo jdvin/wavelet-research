@@ -18,6 +18,10 @@ from utils.data_utils import (
     get_eeg_eye_net_collate_fn,
     get_nth_mask,
 )
+from utils.electrode_utils import (
+    Region,
+    get_region_mask,
+)
 
 from pytorch_memlab import MemReporter
 
@@ -116,10 +120,11 @@ def main(
         )
 
     logger.info("Creating data loaders.")
-    train_mask = get_nth_mask(129, 2, 1)
-    val_mask = get_nth_mask(129, 2, 2)
-    train_collate_fn = get_eeg_eye_net_collate_fn(mask=train_mask)
-    val_collate_fn = get_eeg_eye_net_collate_fn(mask=val_mask)
+    region_mask = get_region_mask(
+        model.module.data_config.channel_positions.numpy(), []  # [Region.OCCIPITAL]
+    )
+    train_collate_fn = get_eeg_eye_net_collate_fn(mask=torch.tensor(region_mask))
+    val_collate_fn = get_eeg_eye_net_collate_fn(mask=torch.tensor(region_mask))
     # Create data loaders.
     (
         train_dataloader,

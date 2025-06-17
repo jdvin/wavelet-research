@@ -64,12 +64,11 @@ class EEGDataConfig:
     # N_channels x 3 tensor of electrode positions normalised to [-1, 1]
     channel_positions: Tensor = field(
         default_factory=lambda: torch.tensor(
-            [
-                pos
-                for _, pos in mne.channels.make_standard_montage("GSN-HydroCel-129")
+            list(
+                mne.channels.make_standard_montage("GSN-HydroCel-129")
                 .get_positions()["ch_pos"]
-                .items()
-            ]
+                .values()
+            )
         )
     )
     # Maximum sampling rate used.
@@ -136,8 +135,6 @@ class EEGPerceiverResampler(nn.Module):
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
         B, T, C = source.shape
-        # perm = torch.randperm(C)
-        # source = source[..., perm]
         T_emb = T  # self.embed_l_out(T)
         pos_emb = (
             self.embed_positions(self.channel_positions)
@@ -145,13 +142,13 @@ class EEGPerceiverResampler(nn.Module):
             .unsqueeze(-1)
             .expand(B, C, self.d_model, T_emb)
         )
-        # source = self.embed(source.reshape(B * C, 1, T)).reshape(
-        #     B, C, self.d_model, T_emb
-        # )
+        source = self.embed(source.reshape(B * C, 1, T)).reshape(
+            B, C, self.d_model, T_emb
+        )
         source = (
             (source + pos_emb).permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
         )
-        source = source.permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
+        # source = source.permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
         latents = (
             self.query_latents.clone()
             .unsqueeze(0)
@@ -192,6 +189,7 @@ class MontageNet(nn.Module):
         world_size: int,
     ):
         super().__init__()
+        self.data_config = config.data_config
         self.n_latents = config.n_latents
         self.d_model = config.d_model
         self.encoder = EEGPerceiverResampler(

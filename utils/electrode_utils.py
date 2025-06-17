@@ -2,7 +2,7 @@ from copy import deepcopy
 import tempfile
 import os
 from dataclasses import dataclass
-
+from enum import Enum
 import mne
 import requests, io, numpy as np
 from stl import mesh
@@ -52,11 +52,57 @@ def mesh_to_plotly(mesh_obj, color, opacity, name):
     )
 
 
+class Region(Enum):
+    FRONTAL = "frontal"
+    TEMPORAL = "temporal"
+    PARIETAL = "parietal"
+    OCCIPITAL = "occipital"
+
+
 @dataclass
 class Montage:
     name: str
     electrode_names: list[str]
     pos_array: np.ndarray
+
+
+def get_region_mask(
+    electrode_positions: np.ndarray, regions: list[Region]
+) -> np.ndarray:
+    """Get a boolean mask for the specified regions"""
+    # ---- 2. convert to head-centric spherical coordinates ------------------
+    # x = Right(+), y = Anterior(+), z = Superior(+)
+    x, y, z = electrode_positions.T
+    r = np.linalg.norm(electrode_positions, axis=1)  # radius (≈ constant)
+    az = np.degrees(np.arctan2(y, x)) % 360  # 0°=R, 90°=A, 180°=L, 270°=P
+    el = np.degrees(np.arcsin(z / r))  # +90° = vertex (Cz)
+
+    # ---- 3. crude lobar boundaries in spherical coords --------------------
+    # You can tweak these thresholds for your net size / ROI granularity.
+    mask = np.zeros(electrode_positions.shape[0], dtype=bool)
+    frontal = (az >= 45) & (az <= 135)
+    occipital = (az >= 225) & (az <= 315)
+    temporal = (((az > 135) & (az < 225)) | ((az > 315) | (az < 45))) & (el < 15)
+    parietal = (~frontal & ~occipital & ~temporal) & (el > 15)
+    if Region.FRONTAL in regions:
+        mask = mask | frontal
+    if Region.TEMPORAL in regions:
+        mask = mask | temporal
+    if Region.PARIETAL in regions:
+        mask = mask | parietal
+    if Region.OCCIPITAL in regions:
+        mask = mask | occipital
+    return mask
+
+
+def mask_regions(montage: Montage, regions: list[Region]) -> Montage:
+    """Mask the montage to only include the specified regions"""
+    mask = get_region_mask(montage.pos_array, regions)
+    return Montage(
+        str(regions),
+        [name for m, name in zip(mask, montage.electrode_names) if m],
+        montage.pos_array[mask],
+    )
 
 
 def get_montage(montage_name: str) -> Montage:
@@ -68,7 +114,13 @@ def get_montage(montage_name: str) -> Montage:
     )
 
 
-def plot_montages(fig, montages: list[Montage], colors=None, skull_bounds=None):
+def plot_montages(
+    fig,
+    montages: list[Montage],
+    colors: list[str],
+    ref_montage: Montage,
+    skull_bounds=None,
+):
     """Plot multiple electrode montages on the figure with different colors
 
     Args:
@@ -80,11 +132,6 @@ def plot_montages(fig, montages: list[Montage], colors=None, skull_bounds=None):
     Returns:
         List of electrode position arrays for bounds calculation
     """
-    if colors is None:
-        colors = ["blue", "red", "green", "orange", "purple", "brown", "pink", "gray"]
-
-    # Ensure we have enough colors
-    colors = colors * (len(montages) // len(colors) + 1)
 
     all_electrode_positions = []
 
@@ -97,11 +144,11 @@ def plot_montages(fig, montages: list[Montage], colors=None, skull_bounds=None):
         # Scale electrode positions to approximate skull size if skull_bounds provided
         if skull_bounds is not None:
             skull_scale = np.max(skull_bounds) - np.min(skull_bounds)
-            montage_scale = np.max(pos_array) - np.min(pos_array)
+            montage_scale = np.max(pos_array) - np.min(ref_montage.pos_array)
             scale_factor = skull_scale / montage_scale * 0.75
 
             # Center and scale the electrode positions
-            pos_centered = pos_array - np.mean(pos_array, axis=0)
+            pos_centered = pos_array - np.mean(ref_montage.pos_array, axis=0)
             pos_scaled = pos_centered * scale_factor
             pos_final = pos_scaled
         else:
@@ -123,25 +170,20 @@ def plot_montages(fig, montages: list[Montage], colors=None, skull_bounds=None):
             )
         )
 
-        # Add text labels for electrodes (only show every nth to avoid clutter)
-        n = 1
-        label_step = max(1, len(electrode_names) // n)
-        label_indices = np.arange(0, len(electrode_names), label_step)
-        if len(label_indices) > 0:
-            fig.add_trace(
-                go.Scatter3d(
-                    x=pos_final[label_indices, 0],
-                    y=pos_final[label_indices, 1],
-                    z=pos_final[label_indices, 2],
-                    mode="text",
-                    text=[electrode_names[i] for i in label_indices],
-                    textposition="middle center",
-                    textfont=dict(size=8, color=color),
-                    name=f"Labels ({montage.name})",
-                    showlegend=False,
-                    hoverinfo="skip",
-                )
+        fig.add_trace(
+            go.Scatter3d(
+                x=pos_final[:, 0],
+                y=pos_final[:, 1],
+                z=pos_final[:, 2] + 5,  # Offset labels above markers
+                mode="text",
+                text=electrode_names,
+                textposition="middle center",
+                textfont=dict(size=8, color=color),
+                name=f"Labels ({montage.name})",
+                showlegend=False,
+                hoverinfo="skip",
             )
+        )
 
     return all_electrode_positions
 
@@ -205,21 +247,15 @@ def main():
     # montage_names = ["GSN-HydroCel-129"]  # Default single montage
     # Example of multiple montages:
     full_montage = get_montage("GSN-HydroCel-129")
-    a_mask = deepcopy(full_montage)
-    a_mask.pos_array = np.array(
-        [e for i, e in enumerate(a_mask.pos_array) if i % 2 == 0]
-    )
-    a_mask.electrode_names = [e for i, e in enumerate(a_mask.pos_array) if i % 2 == 0]
-    b_mask = deepcopy(full_montage)
-    b_mask.pos_array = np.array(
-        [e for i, e in enumerate(b_mask.pos_array) if i % 2 == 1]
-    )
-    b_mask.electrode_names = [e for i, e in enumerate(b_mask.pos_array) if i % 2 == 1]
-    colors = ["blue", "red"]
-    montages = [a_mask, b_mask]
+    occipital = mask_regions(full_montage, [Region.OCCIPITAL])
+    parietal = mask_regions(full_montage, [Region.PARIETAL])
+    temporal = mask_regions(full_montage, [Region.TEMPORAL])
+    frontal = mask_regions(full_montage, [Region.FRONTAL])
+    colors = ["blue", "red", "green", "orange"]
+    montages = [occipital, parietal, temporal, frontal]
 
     electrode_positions = plot_montages(
-        fig, montages, colors, skull_bounds=skull_bounds
+        fig, montages, colors, full_montage, skull_bounds=skull_bounds
     )
 
     # Configure layout for better performance and appearance - include electrode positions in bounds
