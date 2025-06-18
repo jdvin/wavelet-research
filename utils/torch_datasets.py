@@ -21,3 +21,21 @@ class EEGEyeNetDataset(Dataset):
         return self.inputs[index], [
             self.labels_map[label.item().split("_")[1]] for label in self.labels[index]
         ]
+
+
+class MappedLabelDataset(Dataset):
+    def __init__(
+        self,
+        inputs: np.memmap,
+        labels: np.memmap,
+        labels_map: dict[str, int],
+    ):
+        self.labels_map = labels_map
+        self.inputs = inputs
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, index: int) -> tuple[np.ndarray, int]:
+        return self.inputs[index], self.labels_map[self.labels[index].item()]

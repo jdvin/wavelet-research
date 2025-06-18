@@ -261,6 +261,7 @@ def get_dataloaders(
         shuffle=train_sampler is None,
         sampler=train_sampler,
         collate_fn=train_collate_fn,
+        num_workers=2,
     )
     val_dataloader = DataLoader(
         dataset["val"],  # type: ignore
@@ -268,6 +269,7 @@ def get_dataloaders(
         shuffle=val_sampler is None,
         sampler=val_sampler,
         collate_fn=val_collate_fn,
+        num_workers=2,
     )
     return train_dataloader, train_sampler, val_dataloader, val_sampler
 

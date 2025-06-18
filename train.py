@@ -14,8 +14,10 @@ from torch.amp.grad_scaler import GradScaler
 from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 from utils.data_utils import (
+    EEGMMISplit,
     extract_eeg_eye_net_ds,
     get_eeg_eye_net_collate_fn,
+    get_eeg_mmi_dataset,
     get_nth_mask,
 )
 from utils.electrode_utils import (
@@ -107,16 +109,34 @@ def main(
     # The first rank goes ahead to create the dataset if it does not already exist, before the other ranks then load it.
     # This is probably quite a strange pattern, but it is the simplest way to implement this behaviour.
     # TODO: Distributed dataset creation.
+    splits = {
+        "train": EEGMMISplit(
+            name="train",
+            subjects=list(range(1, 100)),
+            sessions=[1, 2],
+        ),
+        "val": EEGMMISplit(
+            name="val",
+            subjects=list(range(100, 110)),
+            sessions=[1, 2],
+        ),
+    }
     if is_main_process:
-        ds = extract_eeg_eye_net_ds(
-            root_dir=cfg.dataset_path,
+        ds = get_eeg_mmi_dataset(
+            source_base_path=cfg.dataset_path,
+            output_path="data",
+            splits=splits,
+            labels_map={"e_open": 0, "e_clos": 1},
         )
         if world_size > 1:
             dist.barrier()
     else:
         dist.barrier()
-        ds = extract_eeg_eye_net_ds(
-            root_dir=cfg.dataset_path,
+        ds = get_eeg_mmi_dataset(
+            source_base_path=cfg.dataset_path,
+            output_path="data",
+            splits=splits,
+            labels_map={"e_open": 0, "e_clos": 1},
         )
 
     logger.info("Creating data loaders.")
@@ -201,7 +221,7 @@ def main(
             and metrics.epoch_microstep.value != len(train_dataloader)
         )
         # Forward and backward pass.
-        # Do no sync gradients whilst accumulating.
+        # Do not sync gradients whilst accumulating.
         ddp_context = (
             nullcontext() if world_size == 1 or is_accumulating else model.no_sync()
         )

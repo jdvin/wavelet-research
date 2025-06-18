@@ -3,6 +3,7 @@ from enum import Enum
 import os
 from typing import Callable, Any
 from torch.utils.data import Dataset
+import mne
 
 
 from loguru import logger
@@ -11,7 +12,7 @@ import torch
 from torch import Tensor
 from tqdm import tqdm
 
-from utils.torch_datasets import EEGEyeNetDataset
+from utils.torch_datasets import MappedLabelDataset, EEGEyeNetDataset
 
 
 class ValidationType(Enum):
@@ -377,3 +378,260 @@ def get_things_100ms_collate_fn(
         }
 
     return collate_fn
+
+
+class EEGMMITask(Enum):
+    BASELINE_EYES_OPEN = "baseline_eyes_open"
+    BASELINE_EYES_CLOSED = "baseline_eyes_closed"
+    TASK_1 = "task_1_move_left_right_fist"
+    TASK_2 = "task_2_imag_left_right_fist"
+    TASK_3 = "task_3_move_fists_feet"
+    TASK_4 = "task_4_imag_fists_feet"
+
+
+SESSION_TO_TASK = {
+    1: EEGMMITask.BASELINE_EYES_OPEN,
+    2: EEGMMITask.BASELINE_EYES_CLOSED,
+    3: EEGMMITask.TASK_1,
+    4: EEGMMITask.TASK_2,
+    5: EEGMMITask.TASK_3,
+    6: EEGMMITask.TASK_4,
+    7: EEGMMITask.TASK_1,
+    8: EEGMMITask.TASK_2,
+    9: EEGMMITask.TASK_3,
+    10: EEGMMITask.TASK_4,
+    11: EEGMMITask.TASK_1,
+    12: EEGMMITask.TASK_2,
+    13: EEGMMITask.TASK_3,
+    14: EEGMMITask.TASK_4,
+}
+
+
+class Annotation(Enum):
+    EYES_OPEN = "e_open"
+    EYES_CLOSED = "e_clos"
+    REST = "b_rest"
+    LEFT_FIST = "l_fist"
+    RIGHT_FIST = "r_fist"
+    BOTH_FIST = "b_fist"
+    BOTH_FEET = "b_feet"
+
+
+@dataclass
+class AnnotationFactory:
+    ANNOTATION_CODE_MAP: dict[int, dict[str, Annotation]] = {
+        1: {
+            "T0": Annotation.REST,
+        },
+        2: {
+            "T0": Annotation.REST,
+        },
+        3: {
+            "T0": Annotation.REST,
+            "T1": Annotation.LEFT_FIST,
+            "T2": Annotation.RIGHT_FIST,
+        },
+        4: {
+            "T0": Annotation.REST,
+            "T1": Annotation.LEFT_FIST,
+            "T2": Annotation.RIGHT_FIST,
+        },
+        5: {
+            "T0": Annotation.REST,
+            "T1": Annotation.BOTH_FIST,
+            "T2": Annotation.BOTH_FEET,
+        },
+        6: {
+            "T0": Annotation.REST,
+            "T1": Annotation.BOTH_FIST,
+            "T2": Annotation.BOTH_FEET,
+        },
+        7: {
+            "T0": Annotation.REST,
+            "T1": Annotation.LEFT_FIST,
+            "T2": Annotation.RIGHT_FIST,
+        },
+        8: {
+            "T0": Annotation.REST,
+            "T1": Annotation.LEFT_FIST,
+            "T2": Annotation.RIGHT_FIST,
+        },
+        9: {
+            "T0": Annotation.REST,
+            "T1": Annotation.BOTH_FIST,
+            "T2": Annotation.BOTH_FEET,
+        },
+        10: {
+            "T0": Annotation.REST,
+            "T1": Annotation.BOTH_FIST,
+            "T2": Annotation.BOTH_FEET,
+        },
+        11: {
+            "T0": Annotation.REST,
+            "T1": Annotation.LEFT_FIST,
+            "T2": Annotation.RIGHT_FIST,
+        },
+        12: {
+            "T0": Annotation.REST,
+            "T1": Annotation.LEFT_FIST,
+            "T2": Annotation.RIGHT_FIST,
+        },
+        13: {
+            "T0": Annotation.REST,
+            "T1": Annotation.BOTH_FIST,
+            "T2": Annotation.BOTH_FEET,
+        },
+        14: {
+            "T0": Annotation.REST,
+            "T1": Annotation.BOTH_FIST,
+            "T2": Annotation.BOTH_FEET,
+        },
+    }
+
+    @classmethod
+    def from_session_and_code(cls, session: int, code: str) -> Annotation:
+        return cls.ANNOTATION_CODE_MAP[session][code]
+
+
+@dataclass
+class EEGMMISplit:
+    name: str
+    subjects: list[int]
+    sessions: list[int]
+    max_subjects: int = 109
+    max_sessions: int = 14
+
+    def code(self) -> str:
+        subjects_onehot = np.zeros(self.max_subjects)
+        subjects_onehot[self.subjects] = 1
+        sessions_onehot = np.zeros(self.max_sessions)
+        sessions_onehot[self.sessions] = 1
+        return f"sub-{''.join(str(s) for s in self.subjects)}_sess-{''.join(str(s) for s in self.sessions)}"
+
+
+def extract_eeg_mmi_session_data(
+    base_path: str, subject: int, session: int, ignore_cache: bool = False
+) -> tuple[np.memmap, np.memmap]:
+    """Extract the raw EEG and annotations from an edf file return
+    a np.memmap of shape (N_E, N_C, T) where:
+        N_E: number of epochs.
+        N_C: number of channels.
+        T: number of time samples.
+    containing EEG data and a memmap of shape (N_E) containing the annotations
+    """
+    subject_str = str(subject).zfill(3)
+    session_str = str(session).zfill(2)
+    output_eeg_path = os.path.join(
+        base_path, subject_str, f"{subject_str}{session_str}.edf"
+    )
+    output_labels_path = os.path.join(
+        base_path, subject_str, f"{subject_str}{session_str}_labels.npy"
+    )
+    cached = (
+        os.path.exists(output_eeg_path)
+        and os.path.exists(output_labels_path)
+        and not ignore_cache
+    )
+    path = os.path.join(base_path, subject_str, f"{subject_str}{session_str}.edf")
+    data = mne.io.read_raw_edf(path)
+    events, event_map = mne.events_from_annotations(data)
+    # Reverse the mapping to go from labels to annotations.
+    labels_to_annotations = {value: key for key, value in event_map.items()}
+    eeg_data = data.get_data()
+    assert isinstance(eeg_data, np.ndarray)
+    # Get the maximum duration between two consecutive events.
+    max_event_duration = np.max(np.diff(events[:, 0]))
+    session_eeg = np.memmap(
+        filename=os.path.join(
+            base_path, subject_str, f"{subject_str}{session_str}_eeg.npy"
+        ),
+        mode="r" if cached else "w+",
+        shape=(len(events), max_event_duration),
+        dtype=eeg_data.dtype,
+    )
+    session_labels = np.memmap(
+        filename=os.path.join(
+            base_path, subject_str, f"{subject_str}{session_str}_labels.npy"
+        ),
+        mode="r" if cached else "w+",
+        shape=(len(events),),
+        dtype="<U9",
+    )
+    if cached:
+        return session_eeg, session_labels
+
+    events_list = events.tolist()
+    final_event_stop = events_list[-1][0] + max_event_duration
+    for i, (current_event, next_event) in enumerate(
+        zip(
+            events_list,
+            events_list[1:] + [final_event_stop, 0, 0],
+        )
+    ):
+        event_start = current_event[0]
+        event_stop = next_event[0]
+        annotation_code = labels_to_annotations[current_event[2]]
+        annotation = AnnotationFactory.from_session_and_code(session, annotation_code)
+        session_eeg[i, event_start:event_stop] = eeg_data[:, event_start:event_stop]
+        session_labels[i] = annotation.value
+
+    session_eeg.flush()
+    session_labels.flush()
+    return session_eeg, session_labels
+
+
+def extract_eeg_mmi_split(base_path: str, split: EEGMMISplit, output_path: str):
+    eeg_path = os.path.join(output_path, f"{split.name}_{split.code()}_eeg.npy")
+    labels_path = os.path.join(output_path, f"{split.name}_{split.code()}_labels.npy")
+    if os.path.exists(eeg_path) and os.path.exists(labels_path):
+        return np.memmap(eeg_path, mode="r"), np.memmap(labels_path, mode="r")
+    eegs, labels = [], []
+    shapes = np.zeros((len(split.subjects) * len(split.sessions), 3))
+    for i, subject in enumerate(split.subjects):
+        for j, session in enumerate(split.sessions):
+            eeg, label = extract_eeg_mmi_session_data(base_path, subject, session)
+            eegs.append(eeg)
+            labels.append(label)
+            shapes[i * len(split.sessions) + j] = eeg.shape
+    n_trials = shapes[:, 0].sum()
+    n_channels = shapes[:, 1].max()
+    n_samples = shapes[:, 2].max()
+
+    split_eeg = np.memmap(
+        filename=eeg_path,
+        mode="w+",
+        shape=(n_trials, n_channels, n_samples),
+        dtype=eegs[0].dtype,
+    )
+    split_labels = np.memmap(
+        filename=labels_path,
+        mode="w+",
+        shape=(n_trials),
+        dtype="<U6",
+    )
+    cum_trial = 0
+    for shape, eeg, label in zip(shapes, eegs, labels):
+        split_eeg[cum_trial : cum_trial + shape[0], 0 : shape[1], 0 : shape[2]] = eeg
+        split_labels[cum_trial : cum_trial + shape[0]] = label
+        cum_trial += shape[0]
+
+    split_eeg.flush()
+    split_labels.flush()
+    return split_eeg, split_labels
+
+
+def get_eeg_mmi_dataset(
+    source_base_path: str,
+    output_path: str,
+    splits: dict[str, EEGMMISplit],
+    labels_map: dict[str, int],
+) -> dict[str, np.memmap]:
+    ret = {}
+    os.makedirs(output_path, exist_ok=True)
+    for split_name, split in splits.items():
+        split_eeg, split_labels = extract_eeg_mmi_split(
+            source_base_path, split, output_path
+        )
+        dataset = MappedLabelDataset(split_eeg, split_labels, labels_map)
+        ret[split_name] = dataset
+    return ret
