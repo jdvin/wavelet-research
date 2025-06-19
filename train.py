@@ -127,6 +127,7 @@ def main(
             output_path="data",
             splits=splits,
             labels_map={"e_open": 0, "e_clos": 1},
+            reset_cache=True,
         )
         if world_size > 1:
             dist.barrier()
@@ -137,6 +138,7 @@ def main(
             output_path="data",
             splits=splits,
             labels_map={"e_open": 0, "e_clos": 1},
+            reset_cache=True,
         )
 
     logger.info("Creating data loaders.")

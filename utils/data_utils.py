@@ -419,10 +419,10 @@ class Annotation(Enum):
 
 ANNOTATION_CODE_MAP: dict[int, dict[str, Annotation]] = {
     1: {
-        "T0": Annotation.REST,
+        "T0": Annotation.EYES_OPEN,
     },
     2: {
-        "T0": Annotation.REST,
+        "T0": Annotation.EYES_CLOSED,
     },
     3: {
         "T0": Annotation.REST,
@@ -496,9 +496,10 @@ class EEGMMISplit:
     max_sessions: int = 14
 
     def code(self) -> str:
-        subjects_onehot = np.zeros(self.max_subjects)
+        # Hack bc subjects and sessions are 1-indexed.
+        subjects_onehot = np.zeros(self.max_subjects + 1)
         subjects_onehot[self.subjects] = 1
-        sessions_onehot = np.zeros(self.max_sessions)
+        sessions_onehot = np.zeros(self.max_sessions + 1)
         sessions_onehot[self.sessions] = 1
         return f"sub-{''.join(str(s) for s in self.subjects)}_sess-{''.join(str(s) for s in self.sessions)}"
 
@@ -536,12 +537,14 @@ def extract_eeg_mmi_session_data(
     )
     data = mne.io.read_raw_edf(source_path)
     events, event_map = mne.events_from_annotations(data)
-
     # Reverse the mapping to go from labels to annotations.
     labels_to_annotations = {value: key for key, value in event_map.items()}
     eeg_data = data.get_data()
     assert isinstance(eeg_data, np.ndarray)
     num_channels, num_samples = eeg_data.shape
+    if events.shape[0] == 2:
+        # Huge hack for one specific anamoly.
+        events = events[0:1]
     # For the eyes open, eyes closed tasks, we have a single event.
     # So split it up into multiple pseudo events.
     if events.shape[0] == 1:
@@ -551,8 +554,6 @@ def extract_eeg_mmi_session_data(
         events[:, 0] = np.arange(num_events) * default_event_length
 
     # Get the maximum duration between two consecutive events.
-    # If there is only one event, then we set the duration to 1 second (180 samples).
-    # TODO: Do better.
     max_event_duration = np.max(np.diff(events[:, 0]))
     session_eeg = np.memmap(
         filename=os.path.join(output_path, f"{subject_str}{session_str}_eeg.npy"),
@@ -591,25 +592,26 @@ def extract_eeg_mmi_session_data(
     return session_eeg, session_labels
 
 
-def extract_eeg_mmi_split(base_path: str, split: EEGMMISplit, output_path: str):
+def extract_eeg_mmi_split(
+    base_path: str, split: EEGMMISplit, output_path: str, reset_cache: bool = False
+):
     eeg_path = os.path.join(output_path, f"{split.name}_{split.code()}_eeg.npy")
     labels_path = os.path.join(output_path, f"{split.name}_{split.code()}_labels.npy")
-    if os.path.exists(eeg_path) and os.path.exists(labels_path):
+    if os.path.exists(eeg_path) and os.path.exists(labels_path) and not reset_cache:
         return np.memmap(eeg_path, mode="r"), np.memmap(labels_path, mode="r")
     eegs, labels = [], []
-    shapes = np.zeros((len(split.subjects) * len(split.sessions), 3))
+    shapes = np.zeros((len(split.subjects) * len(split.sessions), 3), dtype=int)
     for i, subject in enumerate(split.subjects):
         for j, session in enumerate(split.sessions):
             eeg, label = extract_eeg_mmi_session_data(
-                base_path, output_path, subject, session
+                base_path, output_path, subject, session, reset_cache
             )
             eegs.append(eeg)
             labels.append(label)
             shapes[i * len(split.sessions) + j] = eeg.shape
-    n_trials = shapes[:, 0].sum()
-    n_channels = shapes[:, 1].max()
-    n_samples = shapes[:, 2].max()
-
+    n_trials = int(shapes[:, 0].sum())
+    n_channels = int(shapes[:, 1].max())
+    n_samples = int(shapes[:, 2].max())
     split_eeg = np.memmap(
         filename=eeg_path,
         mode="w+",
@@ -624,6 +626,7 @@ def extract_eeg_mmi_split(base_path: str, split: EEGMMISplit, output_path: str):
     )
     cum_trial = 0
     for shape, eeg, label in zip(shapes, eegs, labels):
+        print(shape, cum_trial)
         split_eeg[cum_trial : cum_trial + shape[0], 0 : shape[1], 0 : shape[2]] = eeg
         split_labels[cum_trial : cum_trial + shape[0]] = label
         cum_trial += shape[0]
@@ -638,12 +641,13 @@ def get_eeg_mmi_dataset(
     output_path: str,
     splits: dict[str, EEGMMISplit],
     labels_map: dict[str, int],
+    reset_cache: bool = False,
 ) -> dict[str, np.memmap]:
     ret = {}
     os.makedirs(output_path, exist_ok=True)
     for split_name, split in splits.items():
         split_eeg, split_labels = extract_eeg_mmi_split(
-            source_base_path, split, output_path
+            source_base_path, split, output_path, reset_cache
         )
         dataset = MappedLabelDataset(split_eeg, split_labels, labels_map)
         ret[split_name] = dataset
