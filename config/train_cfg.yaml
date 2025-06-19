@@ -1,5 +1,5 @@
 dtype: bf16
-dataset_path: /teamspace/uploads/vss/
+dataset_path: /teamspace/uploads/eeg-motor-movement-imagery
 num_epochs: 10
 batch_size: 32
 train_micro_batch_size: 4
