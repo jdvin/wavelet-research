@@ -60,6 +60,7 @@ def main(
     test_run: bool,
     device: str,
     checkpoints: bool,
+    reset_data_cache: bool,
 ):
     cfg = TrainingConfig(
         **load_yaml(training_config_path),
@@ -127,7 +128,7 @@ def main(
             output_path="data",
             splits=splits,
             labels_map={"e_open": 0, "e_clos": 1},
-            reset_cache=True,
+            reset_cache=reset_data_cache,
         )
         if world_size > 1:
             dist.barrier()
@@ -138,15 +139,16 @@ def main(
             output_path="data",
             splits=splits,
             labels_map={"e_open": 0, "e_clos": 1},
-            reset_cache=True,
+            reset_cache=reset_data_cache,
         )
 
     logger.info("Creating data loaders.")
-    region_mask = get_region_mask(
-        model.module.data_config.channel_positions.numpy(), []  # [Region.OCCIPITAL]
-    )
-    train_collate_fn = get_eeg_eye_net_collate_fn(mask=torch.tensor(region_mask))
-    val_collate_fn = get_eeg_eye_net_collate_fn(mask=torch.tensor(region_mask))
+    region_mask = None
+    # torch.tensor(get_region_mask(
+    #     model.module.data_config.channel_positions.numpy(), []  # [Region.OCCIPITAL]
+    # ))
+    train_collate_fn = get_eeg_eye_net_collate_fn(mask=region_mask)
+    val_collate_fn = get_eeg_eye_net_collate_fn(mask=region_mask)
     # Create data loaders.
     (
         train_dataloader,
@@ -179,7 +181,7 @@ def main(
     logger.info("Creating optimizer.")
 
     optim, lr_scheduler = configure_optimizers(
-        model.module.parameters,
+        model.module.optim_groups(cfg.weight_decay),
         num_batches=steps_per_epoch * cfg.num_epochs,
         max_lr=cfg.max_lr,
         weight_decay=cfg.weight_decay,
@@ -314,6 +316,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-config-path", type=str, default=None)
     parser.add_argument("--world-size", type=int, default=1)
     parser.add_argument("--checkpoints", action="store_true", default=False)
+    parser.add_argument("--reset-data-cache", action="store_true", default=False)
 
     args = parser.parse_args()
     if args.world_size == 1:
@@ -332,6 +335,7 @@ if __name__ == "__main__":
                 args.test_run,
                 args.device,
                 args.checkpoints,
+                args.reset_data_cache,
             ),
             nprocs=args.world_size,
             join=True,

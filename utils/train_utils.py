@@ -207,7 +207,7 @@ def configure_optimizers(
 ):
     if use_shampoo:
         optimizer = DistributedShampoo(
-            parameters(),
+            parameters,
             lr=max_lr,
             betas=(0.9, 0.999),
             epsilon=1e-12,
@@ -222,7 +222,7 @@ def configure_optimizers(
         )
     else:
         optimizer = AdamW(
-            [p for p in parameters() if p.requires_grad],
+            parameters,
             lr=max_lr,
             weight_decay=weight_decay,
         )

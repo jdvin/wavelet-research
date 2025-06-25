@@ -13,6 +13,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from utils.torch_datasets import MappedLabelDataset, EEGEyeNetDataset
+from utils.electrode_utils import physionet_64_montage
 
 
 class ValidationType(Enum):
@@ -497,11 +498,11 @@ class EEGMMISplit:
 
     def code(self) -> str:
         # Hack bc subjects and sessions are 1-indexed.
-        subjects_onehot = np.zeros(self.max_subjects + 1)
+        subjects_onehot = np.zeros(self.max_subjects + 1, dtype=int)
         subjects_onehot[self.subjects] = 1
-        sessions_onehot = np.zeros(self.max_sessions + 1)
+        sessions_onehot = np.zeros(self.max_sessions + 1, dtype=int)
         sessions_onehot[self.sessions] = 1
-        return f"sub-{''.join(str(s) for s in self.subjects)}_sess-{''.join(str(s) for s in self.sessions)}"
+        return f"sub-{''.join(str(s) for s in subjects_onehot.tolist())}_sess-{''.join(str(s) for s in sessions_onehot.tolist())}"
 
 
 def extract_eeg_mmi_session_data(
@@ -565,7 +566,7 @@ def extract_eeg_mmi_session_data(
         filename=os.path.join(output_path, f"{subject_str}{session_str}_labels.npy"),
         mode="r" if cached else "w+",
         shape=(len(events),),
-        dtype="<U9",
+        dtype="<U6",
     )
     if cached:
         return session_eeg, session_labels
@@ -598,7 +599,9 @@ def extract_eeg_mmi_split(
     eeg_path = os.path.join(output_path, f"{split.name}_{split.code()}_eeg.npy")
     labels_path = os.path.join(output_path, f"{split.name}_{split.code()}_labels.npy")
     if os.path.exists(eeg_path) and os.path.exists(labels_path) and not reset_cache:
-        return np.memmap(eeg_path, mode="r"), np.memmap(labels_path, mode="r")
+        return np.load(eeg_path, mmap_mode="r", allow_pickle=True), np.load(
+            labels_path, mmap_mode="r", allow_pickle=True
+        )
     eegs, labels = [], []
     shapes = np.zeros((len(split.subjects) * len(split.sessions), 3), dtype=int)
     for i, subject in enumerate(split.subjects):
@@ -612,28 +615,25 @@ def extract_eeg_mmi_split(
     n_trials = int(shapes[:, 0].sum())
     n_channels = int(shapes[:, 1].max())
     n_samples = int(shapes[:, 2].max())
-    split_eeg = np.memmap(
-        filename=eeg_path,
-        mode="w+",
+    split_eeg = np.zeros(
         shape=(n_trials, n_channels, n_samples),
         dtype=eegs[0].dtype,
     )
-    split_labels = np.memmap(
-        filename=labels_path,
-        mode="w+",
+    split_labels = np.zeros(
         shape=(n_trials),
         dtype="<U6",
     )
     cum_trial = 0
     for shape, eeg, label in zip(shapes, eegs, labels):
-        print(shape, cum_trial)
         split_eeg[cum_trial : cum_trial + shape[0], 0 : shape[1], 0 : shape[2]] = eeg
         split_labels[cum_trial : cum_trial + shape[0]] = label
         cum_trial += shape[0]
 
-    split_eeg.flush()
-    split_labels.flush()
-    return split_eeg, split_labels
+    np.save(eeg_path, split_eeg)
+    np.save(labels_path, split_labels)
+    return np.load(eeg_path, mmap_mode="r", allow_pickle=True), np.load(
+        labels_path, mmap_mode="r", allow_pickle=True
+    )
 
 
 def get_eeg_mmi_dataset(

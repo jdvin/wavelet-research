@@ -10,6 +10,7 @@ from rotary_embedding_torch import RotaryEmbedding
 from src.components.norm import RMSNorm
 from src.components.attention import MultiHeadAttention
 from src.components.activations import GEGLU
+from utils.electrode_utils import physionet_64_montage
 
 
 class PerceiverResamplerBlock(nn.Module):
@@ -64,17 +65,13 @@ class EEGDataConfig:
     # N_channels x 3 tensor of electrode positions normalised to [-1, 1]
     channel_positions: Tensor = field(
         default_factory=lambda: torch.tensor(
-            list(
-                mne.channels.make_standard_montage("GSN-HydroCel-129")
-                .get_positions()["ch_pos"]
-                .values()
-            )
+            list(physionet_64_montage().get_positions()["ch_pos"].values())
         )
     )
     # Maximum sampling rate used.
-    max_sr: int = 500
+    max_sr: int = 180
     # Minimum sampling rate used.
-    min_sr: int = 500
+    min_sr: int = 180
     # lowest frequency that the embedding can capture.
     f_min: int = 5
 
@@ -134,7 +131,7 @@ class EEGPerceiverResampler(nn.Module):
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
-        B, T, C = source.shape
+        B, C, T = source.shape
         T_emb = T  # self.embed_l_out(T)
         pos_emb = (
             self.embed_positions(self.channel_positions)
@@ -162,7 +159,7 @@ class EEGPerceiverResampler(nn.Module):
                 kv_cache=kv_cache,
             )
         if self.pool_latents:
-            return latents.reshape(B, T_emb, self.n_latents, self.d_model).mean(2)
+            return latents.reshape(B, T_emb, self.n_latents * self.d_model).mean(1)
         else:
             return latents.reshape(B, T_emb * self.n_latents, self.d_model)
 
@@ -176,9 +173,9 @@ class MontageNetConfig:
     d_mlp: int = 2048
     dropout: float = 0.0
     scale_exponent: float = -0.25
-    pool_latents: bool = False
+    pool_latents: bool = True
     n_blocks: int = 4
-    n_classes: int = 3
+    n_classes: int = 2
 
 
 class MontageNet(nn.Module):
@@ -203,21 +200,20 @@ class MontageNet(nn.Module):
             config.dropout,
             config.scale_exponent,
         )
-        self.head = nn.Conv1d(config.d_model * config.n_latents, config.n_classes, 1)
+        # self.head = nn.Conv1d(config.d_model * config.n_latents, config.n_classes, 1)
+        self.head = nn.Linear(config.d_model * config.n_latents, config.n_classes)
 
     def forward(
         self,
         x: Tensor,
     ):
-        B, T, C = x.shape
-        latents = self.encoder(x).reshape(B, self.n_latents * self.d_model, T)
+        latents = self.encoder(x)
         return self.head(latents)
 
     def step(self, batch: dict[str, Tensor]):
         eeg, labels = batch["input_features"], batch["labels"]
-        B, T = labels.shape
-        logits = self(eeg).reshape(B * T, -1)
-        labels = labels.reshape(B * T)
+        logits = self(eeg)
+        labels = labels
         loss = F.cross_entropy(logits, labels)
         return loss, logits, labels
 
