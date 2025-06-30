@@ -1,4 +1,4 @@
-n_latents: 1
+n_latents: 4
 d_model: 1024
 n_heads: 8
 d_mlp: 2048

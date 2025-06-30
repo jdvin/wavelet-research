@@ -101,6 +101,7 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
+    model = torch.compile(model, mode="reduce-overhead")  # type: ignore
     assert len({param.device for param in model.parameters()}) == 1
     log_model_details(model)
     # reporter = MemReporter(model)
@@ -220,6 +221,10 @@ def main(
             dtype=torch_dtype,
         )
     while True:
+        # Start timing the step (including gradient accumulation)
+        if metrics.microstep.value % grad_accum_steps == 1:
+            metrics.start_step_timer()
+
         is_accumulating = (
             metrics.microstep.value % grad_accum_steps != 0
             and metrics.epoch_microstep.value != len(train_dataloader)
@@ -237,6 +242,7 @@ def main(
                 # reporter.report()
                 loss = loss / grad_accum_steps
             metrics.train_loss.update(loss.item())
+            metrics.examples_seen.update(cfg.train_micro_batch_size)
             # Get the next batch straight away without blocking whilst we compute the backward pass,
             # unless we are at the end of the epoch.
             if metrics.epoch_microstep.value < len(train_dataloader) - 1:
@@ -266,6 +272,10 @@ def main(
         optim.zero_grad(set_to_none=True)
         del loss, logits, labels
         lr_scheduler.step()
+
+        # End timing after full step (including gradient accumulation) is complete
+        metrics.end_step_timer()
+
         train_pbar.update()
         if metrics.epoch_step.value in validation_step_indexes or test_run:
             torch.cuda.empty_cache()

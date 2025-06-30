@@ -15,6 +15,7 @@ from torch.distributed import (
     all_gather_into_tensor,
 )
 import wandb
+import time
 
 THINGS_CONCEPTS_PATH = "data/things_concepts.csv"
 # SYNONYM_MAP = {
@@ -194,6 +195,14 @@ get_average_positive_logits = partial(get_average_logits_for_label, label=1)
 get_average_negative_logits = partial(get_average_logits_for_label, label=-1)
 
 
+def calculate_throughput(step_time_batch_size: tuple[float, int]) -> float:
+    """Calculate samples per second from step time and batch size."""
+    step_time, batch_size = step_time_batch_size
+    if step_time > 0:
+        return batch_size / step_time
+    return 0.0
+
+
 def construct_table(
     generations: dict[str, list[str]] | list[dict[str, list[str]]]
 ) -> dict:
@@ -282,6 +291,9 @@ class MetricManager:
     def __init__(self, device, world_size, batch_size, is_main_process, log_interval):
         self.is_main_process = is_main_process
         self.log_interval = log_interval
+        self.batch_size = batch_size
+        self.micro_batch_size = batch_size // world_size  # For tracking examples per microbatch
+        self.step_start_time = None
         self.train_loss = Metric(
             "train/loss", torch.tensor([0.0]), device=device, world_size=world_size
         )
@@ -352,6 +364,31 @@ class MetricManager:
             device=device,
             world_size=world_size,
         )
+        self.throughput = Metric(
+            "train/samples_per_sec",
+            0.0,
+            transform_fn=calculate_throughput,
+            accum_fn=replace,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
+        self.step_time = Metric(
+            "train/step_time_ms",
+            0.0,
+            transform_fn=lambda x: x * 1000,  # Convert to milliseconds
+            accum_fn=replace,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
+        self.examples_seen = Metric(
+            "train/examples_seen",
+            0,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
 
     def log(self):
         if not self.step.value % self.log_interval == 0:
@@ -364,6 +401,18 @@ class MetricManager:
 
         if self.is_main_process:
             wandb.log({}, commit=True)
+
+    def start_step_timer(self):
+        """Call this at the beginning of each training step."""
+        self.step_start_time = time.time()
+    
+    def end_step_timer(self):
+        """Call this at the end of each training step to log timing metrics."""
+        if self.step_start_time is not None:
+            step_time = time.time() - self.step_start_time
+            self.step_time.update(step_time)
+            self.throughput.update((step_time, self.batch_size))
+            self.step_start_time = None
 
     def step_iterators(self, steps_per_epoch: int, num_microbatches: int, lr_scheduler):
         self.step.update(1)
