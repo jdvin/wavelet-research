@@ -4,5 +4,5 @@ n_heads: 8
 d_mlp: 2048
 dropout: 0.0
 scale_exponent: -0.25
-pool_latents: False
+pool_latents: True 
 n_blocks: 4

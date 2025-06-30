@@ -16,7 +16,7 @@ from tqdm import tqdm
 from utils.data_utils import (
     EEGMMISplit,
     extract_eeg_eye_net_ds,
-    get_eeg_eye_net_collate_fn,
+    get_eeg_mmi_collate_fn,
     get_eeg_mmi_dataset,
     get_nth_mask,
 )
@@ -147,8 +147,8 @@ def main(
     # torch.tensor(get_region_mask(
     #     model.module.data_config.channel_positions.numpy(), []  # [Region.OCCIPITAL]
     # ))
-    train_collate_fn = get_eeg_eye_net_collate_fn(mask=region_mask)
-    val_collate_fn = get_eeg_eye_net_collate_fn(mask=region_mask)
+    train_collate_fn = get_eeg_mmi_collate_fn(mask=region_mask)
+    val_collate_fn = get_eeg_mmi_collate_fn(mask=region_mask)
     # Create data loaders.
     (
         train_dataloader,

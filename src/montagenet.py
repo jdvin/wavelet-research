@@ -89,7 +89,7 @@ class EEGPerceiverResampler(nn.Module):
         n_heads: int,
         d_mlp: int,
         n_blocks: int,
-        pool_latents: bool = False,
+        pool_latents: bool,
         dropout: float = 0.0,
         scale_exponent: float = -0.25,
     ):
@@ -196,7 +196,7 @@ class MontageNet(nn.Module):
             config.n_heads,
             config.d_mlp,
             config.n_blocks,
-            False,
+            config.pool_latents,
             config.dropout,
             config.scale_exponent,
         )

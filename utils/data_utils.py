@@ -288,22 +288,27 @@ def get_nth_mask(size: int, n: int, offset: int = 1) -> torch.Tensor:
     return mask.unsqueeze(0).unsqueeze(0)
 
 
-def get_eeg_eye_net_collate_fn(
+def get_eeg_mmi_collate_fn(
     mask: torch.Tensor | None = None,
 ):
-    def eeg_eye_net_collate_fn(
+    def eeg_mmi_collate_fn(
         samples: list[tuple[np.memmap, list[int]]]
     ) -> dict[str, torch.Tensor]:
         # TODO: This is slow AF and should definitely be done on the GPU.
-        input_features_tensor = torch.tensor([sample[0] for sample in samples])
+        input_features, labels = [], []
+        for sample in samples:
+            input_features.append(sample[0])
+            labels.append(sample[1])
+        input_features_tensor = torch.tensor(input_features)
+        labels_tensor = torch.tensor(labels)
         return {
             "input_features": input_features_tensor * mask
             if mask is not None
             else input_features_tensor,
-            "labels": torch.tensor([sample[1] for sample in samples]),
+            "labels": labels_tensor,
         }
 
-    return eeg_eye_net_collate_fn
+    return eeg_mmi_collate_fn
 
 
 def get_things_100ms_collate_fn(
@@ -541,6 +546,10 @@ def extract_eeg_mmi_session_data(
     # Reverse the mapping to go from labels to annotations.
     labels_to_annotations = {value: key for key, value in event_map.items()}
     eeg_data = data.get_data()
+    # Normalize the data.
+    eeg_data = (eeg_data - eeg_data.mean(axis=1, keepdims=True)) / eeg_data.std(
+        axis=1, keepdims=True
+    )
     assert isinstance(eeg_data, np.ndarray)
     num_channels, num_samples = eeg_data.shape
     if events.shape[0] == 2:
@@ -594,7 +603,10 @@ def extract_eeg_mmi_session_data(
 
 
 def extract_eeg_mmi_split(
-    base_path: str, split: EEGMMISplit, output_path: str, reset_cache: bool = False
+    base_path: str,
+    split: EEGMMISplit,
+    output_path: str,
+    reset_cache: bool = False,
 ):
     eeg_path = os.path.join(output_path, f"{split.name}_{split.code()}_eeg.npy")
     labels_path = os.path.join(output_path, f"{split.name}_{split.code()}_labels.npy")
