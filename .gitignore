@@ -133,3 +133,5 @@ data/**
 
 # Checkpoints
 checkpoints/**
+
+.DS_Store

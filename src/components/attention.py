@@ -14,6 +14,7 @@ class MultiHeadAttention(torch.nn.Module):
         source_seq_len: int | None = None,
         target_seq_len: int | None = None,
         rotary_embedding: RotaryEmbedding | None = None,
+        qk_norm: bool = True,
         q_bias: bool = True,
         k_bias: bool = False,
         v_bias: bool = True,
@@ -33,6 +34,10 @@ class MultiHeadAttention(torch.nn.Module):
         assert scale
         self.scale = scale
         self.rotary_embedding = rotary_embedding
+        self.qk_norm = qk_norm
+        if self.qk_norm:
+            assert scale
+        self.tau = nn.Parameter(torch.tensor(scale))
         # The projectons are scalled differently in the original whisper implementation
         self.q_proj = nn.Linear(d_model, d_model, bias=q_bias)
         self.k_proj = nn.Linear(d_model, d_model, bias=k_bias)
@@ -81,12 +86,12 @@ class MultiHeadAttention(torch.nn.Module):
                 v,
                 attn_mask=attention_mask,
                 dropout_p=self.dropout if self.training else 0,
-                scale=self.scale,
+                scale=self.tau if self.qk_norm else self.scale,
             )
 
         else:
             # (B, nhead, T_q, D_head) x (B, nhead, D_head, T_kv) -> (B, nhead, T_q, T_kv).
-            qk = (q @ k.transpose(-2, -1)) * self.scale
+            qk = (q @ k.transpose(-2, -1)) * (self.tau if self.qk_norm else self.scale)
             # Add attention bias (input masking, causal masking, relative pos, etc).
             qk = qk + attention_mask if attention_mask is not None else qk
             attn = F.softmax(qk, dim=-1, dtype=torch.float32).type_as(qk)
@@ -127,6 +132,9 @@ class MultiHeadAttention(torch.nn.Module):
         q = self.split_heads(q, B, T_q, D)
         k = self.split_heads(k, B, T_kv, D)
         v = self.split_heads(v, B, T_kv, D)
+        if self.qk_norm:
+            q = F.normalize(q, dim=-1)
+            k = F.normalize(k, dim=-1)
         bias = (
             self.bias[:, :, T_cached : T_cached + T_q, :T_kv]
             if hasattr(self, "bias")

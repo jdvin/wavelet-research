@@ -13,6 +13,42 @@ from src.components.activations import GEGLU
 from utils.electrode_utils import physionet_64_montage
 
 
+class TemporalAttentionBlock(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        d_mlp: int,
+        rotary_embedding: RotaryEmbedding | None = None,
+        dropout: float = 0.0,
+        scale_exponent: float = -0.25,
+    ):
+        super().__init__()
+        self.attn_ln = RMSNorm(d_model)
+        self.self_attn = MultiHeadAttention(
+            n_heads,
+            d_model,
+            scale=(d_model // n_heads) ** scale_exponent,
+            k_bias=True,
+            rotary_embedding=rotary_embedding,
+            dropout=dropout,
+        )
+        self.mlp_ln = RMSNorm(d_model)
+        self.mlp = nn.Sequential(
+            GEGLU(d_model, d_mlp, bias=False),
+            nn.Linear(d_mlp, d_model, bias=False),
+        )
+
+    def forward(
+        self,
+        x: Tensor,
+        kv_cache: dict[int, Tensor] | None = None,
+    ) -> Tensor:
+        x = x + self.self_attn(self.attn_ln(x), kv_cache=kv_cache)
+        x = x + self.mlp(self.mlp_ln(x))
+        return x
+
+
 class PerceiverResamplerBlock(nn.Module):
     def __init__(
         self,
