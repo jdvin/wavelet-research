@@ -68,9 +68,7 @@ class PerceiverResamplerBlock(nn.Module):
             rotary_embedding=rotary_embedding,
             dropout=dropout,
         )
-        self.source_ln = RMSNorm(d_model)
-        self.latents_ln = RMSNorm(d_model)
-
+        self.attn_ln = RMSNorm(d_model)
         self.mlp = nn.Sequential(
             GEGLU(d_model, d_mlp, bias=False),
             nn.Linear(d_mlp, d_model, bias=False),
@@ -84,11 +82,12 @@ class PerceiverResamplerBlock(nn.Module):
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
-        latents = self.latents_ln(latents)
-        source = self.source_ln(source)
+        full_source = torch.cat([source, latents], dim=1)
+        full_source = self.attn_ln(full_source)
+        latents = full_source[:, -latents.shape[1] :, :]
         latents = latents + self.cross_attn(
             latents,
-            torch.cat([source, latents], dim=1),
+            full_source,
             attention_mask=attention_mask,
             kv_cache=kv_cache,
         )
