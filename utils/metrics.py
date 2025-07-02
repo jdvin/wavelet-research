@@ -292,13 +292,21 @@ class MetricManager:
         self.is_main_process = is_main_process
         self.log_interval = log_interval
         self.batch_size = batch_size
-        self.micro_batch_size = batch_size // world_size  # For tracking examples per microbatch
+        self.micro_batch_size = (
+            batch_size // world_size
+        )  # For tracking examples per microbatch
         self.step_start_time = None
         self.train_loss = Metric(
-            "train/loss", torch.tensor([0.0]), device=device, world_size=world_size
+            "train/loss",
+            torch.tensor([0.0]),
+            device=device,
+            world_size=world_size,
         )
         self.train_gradnorm = Metric(
-            "train/gradnorm", tensor([0.0]), device=device, world_size=world_size
+            "train/gradnorm",
+            tensor([0.0]),
+            device=device,
+            world_size=world_size,
         )
         self.microstep = Metric(
             "train/microstep",
@@ -366,7 +374,7 @@ class MetricManager:
         )
         self.throughput = Metric(
             "train/samples_per_sec",
-            0.0,
+            tensor(0.0),
             transform_fn=calculate_throughput,
             accum_fn=replace,
             reset_rule=MetricResetRule.MANUAL,
@@ -375,9 +383,10 @@ class MetricManager:
         )
         self.step_time = Metric(
             "train/step_time_ms",
-            0.0,
-            transform_fn=lambda x: x * 1000,  # Convert to milliseconds
+            tensor(0.0),
+            transform_fn=lambda x: x * 1000,  # Convert to milliseconds.
             accum_fn=replace,
+            reduce_fn=distributed_identity,  # Assume rank 0 is representative of all ranks.
             reset_rule=MetricResetRule.MANUAL,
             device=device,
             world_size=world_size,
@@ -405,7 +414,7 @@ class MetricManager:
     def start_step_timer(self):
         """Call this at the beginning of each training step."""
         self.step_start_time = time.time()
-    
+
     def end_step_timer(self):
         """Call this at the end of each training step to log timing metrics."""
         if self.step_start_time is not None:
@@ -414,9 +423,12 @@ class MetricManager:
             self.throughput.update((step_time, self.batch_size))
             self.step_start_time = None
 
-    def step_iterators(self, steps_per_epoch: int, num_microbatches: int, lr_scheduler):
+    def step_iterators(
+        self, batch_size: int, steps_per_epoch: int, num_microbatches: int, lr_scheduler
+    ):
         self.step.update(1)
         self.microstep.update(1)
+        self.examples_seen.update(batch_size)
         self.epoch_step.update((self.step.value, steps_per_epoch))
         self.epoch_microstep.update((self.microstep.value, num_microbatches))
         self.lr.update(lr_scheduler.get_last_lr()[0])

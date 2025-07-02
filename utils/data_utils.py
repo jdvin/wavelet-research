@@ -288,27 +288,31 @@ def get_nth_mask(size: int, n: int, offset: int = 1) -> torch.Tensor:
     return mask.unsqueeze(0).unsqueeze(0)
 
 
+def eeg_mmi_collate_fn(
+    samples: list[tuple[np.memmap, list[int]]],
+    mask: torch.Tensor | None = None,
+) -> dict[str, torch.Tensor]:
+    # TODO: This is slow AF and should definitely be done on the GPU.
+    input_features, labels = [], []
+    for sample in samples:
+        input_features.append(sample[0])
+        labels.append(sample[1])
+    input_features_tensor = torch.tensor(np.array(input_features))
+    labels_tensor = torch.tensor(labels)
+    return {
+        "input_features": input_features_tensor * mask
+        if mask is not None
+        else input_features_tensor,
+        "labels": labels_tensor,
+    }
+
+
 def get_eeg_mmi_collate_fn(
     mask: torch.Tensor | None = None,
 ):
-    def eeg_mmi_collate_fn(
-        samples: list[tuple[np.memmap, list[int]]]
-    ) -> dict[str, torch.Tensor]:
-        # TODO: This is slow AF and should definitely be done on the GPU.
-        input_features, labels = [], []
-        for sample in samples:
-            input_features.append(sample[0])
-            labels.append(sample[1])
-        input_features_tensor = torch.tensor(input_features)
-        labels_tensor = torch.tensor(labels)
-        return {
-            "input_features": input_features_tensor * mask
-            if mask is not None
-            else input_features_tensor,
-            "labels": labels_tensor,
-        }
+    from functools import partial
 
-    return eeg_mmi_collate_fn
+    return partial(eeg_mmi_collate_fn, mask=mask)
 
 
 def get_things_100ms_collate_fn(

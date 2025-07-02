@@ -14,7 +14,7 @@ class MultiHeadAttention(torch.nn.Module):
         source_seq_len: int | None = None,
         target_seq_len: int | None = None,
         rotary_embedding: RotaryEmbedding | None = None,
-        qk_norm: bool = True,
+        qk_norm: bool = False,
         q_bias: bool = True,
         k_bias: bool = False,
         v_bias: bool = True,
@@ -79,14 +79,14 @@ class MultiHeadAttention(torch.nn.Module):
             v: Tensor[float] (B, nhead, T_kv, D_head)
             attention_mask: Tensor[float] (B, 1, T_q, T_kv)
         """
-        if self.flash:
+        if self.flash and not self.qk_norm:
             y = F.scaled_dot_product_attention(
                 q,
                 k,
                 v,
                 attn_mask=attention_mask,
                 dropout_p=self.dropout if self.training else 0,
-                scale=self.tau if self.qk_norm else self.scale,
+                scale=self.scale,
             )
 
         else:

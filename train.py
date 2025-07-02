@@ -2,6 +2,8 @@ import argparse
 from contextlib import nullcontext
 import os
 import math
+import signal
+import sys
 
 from loguru import logger
 import torch
@@ -15,7 +17,6 @@ from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 from utils.data_utils import (
     EEGMMISplit,
-    extract_eeg_eye_net_ds,
     get_eeg_mmi_collate_fn,
     get_eeg_mmi_dataset,
     get_nth_mask,
@@ -31,6 +32,7 @@ from utils.train_utils import (
     run_eval,
     setup,
     cleanup,
+    register_cleanup_handlers,
     configure_optimizers,
     load_yaml,
     log_model_details,
@@ -39,6 +41,7 @@ from utils.train_utils import (
     get_validation_step_indexes,
     get_dataloader_iterator,
     TrainingConfig,
+    list_grad_mismatches,
 )
 
 from utils.metrics import (
@@ -88,6 +91,9 @@ def main(
         training_config=cfg,
         model_config=model_config,
     )
+
+    # Register cleanup handlers for graceful shutdown
+    register_cleanup_handlers(world_size)
     is_main_process = rank == 0
     logger.info("Creating model instance.")
     # Create model.
@@ -101,12 +107,12 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
-    model = torch.compile(model, mode="reduce-overhead")  # type: ignore
+    # model = torch.compile(model, mode="reduce-overhead")  # type: ignore
     assert len({param.device for param in model.parameters()}) == 1
     log_model_details(model)
     # reporter = MemReporter(model)
     if world_size > 1:
-        model = DDP(model, device_ids=[rank])  # type: ignore
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
     logger.info(f"Loading dataset from {cfg.dataset_path}.")
     # The first rank goes ahead to create the dataset if it does not already exist, before the other ranks then load it.
     # This is probably quite a strange pattern, but it is the simplest way to implement this behaviour.
@@ -222,7 +228,7 @@ def main(
         )
     while True:
         # Start timing the step (including gradient accumulation)
-        if metrics.microstep.value % grad_accum_steps == 1:
+        if metrics.microstep.value % grad_accum_steps == 0:
             metrics.start_step_timer()
 
         is_accumulating = (
@@ -232,17 +238,16 @@ def main(
         # Forward and backward pass.
         # Do not sync gradients whilst accumulating.
         ddp_context = (
-            nullcontext() if world_size == 1 or is_accumulating else model.no_sync()
+            model.no_sync() if world_size > 1 and is_accumulating else nullcontext()
         )
         # torch.cuda.memory._record_memory_history()
         with ddp_context:
             with scaler_context:
-                loss, logits, labels = model.module.step(micro_batch)
+                loss, logits, labels = model(micro_batch)
                 # logger.debug("====Forward Pass====")
                 # reporter.report()
                 loss = loss / grad_accum_steps
             metrics.train_loss.update(loss.item())
-            metrics.examples_seen.update(cfg.train_micro_batch_size)
             # Get the next batch straight away without blocking whilst we compute the backward pass,
             # unless we are at the end of the epoch.
             if metrics.epoch_microstep.value < len(train_dataloader) - 1:
@@ -260,7 +265,7 @@ def main(
                 (metrics.microstep.value, len(train_dataloader))
             )
             continue
-
+        # list_grad_mismatches(model)
         if cfg.grad_clip > 0:
             scaler.unscale_(optim)
             metrics.train_gradnorm.update(
@@ -272,10 +277,7 @@ def main(
         optim.zero_grad(set_to_none=True)
         del loss, logits, labels
         lr_scheduler.step()
-
-        # End timing after full step (including gradient accumulation) is complete
         metrics.end_step_timer()
-
         train_pbar.update()
         if metrics.epoch_step.value in validation_step_indexes or test_run:
             torch.cuda.empty_cache()
@@ -310,7 +312,9 @@ def main(
         if metrics.epoch.value == cfg.num_epochs + 1:
             logger.info("Training complete.")
             break
-        metrics.step_iterators(steps_per_epoch, len(train_dataloader), lr_scheduler)
+        metrics.step_iterators(
+            cfg.batch_size, steps_per_epoch, len(train_dataloader), lr_scheduler
+        )
     cleanup(world_size)
 
 
@@ -329,24 +333,31 @@ if __name__ == "__main__":
     parser.add_argument("--reset-data-cache", action="store_true", default=False)
 
     args = parser.parse_args()
+
     if args.world_size == 1:
         main(rank=0, **vars(args))
     else:
-        torch_mp.spawn(  # type: ignore
-            main,
-            args=(
-                args.world_size,
-                args.training_config_path,
-                args.model_config_path,
-                args.run_project,
-                args.run_group,
-                args.run_name,
-                args.eval_first,
-                args.test_run,
-                args.device,
-                args.checkpoints,
-                args.reset_data_cache,
-            ),
-            nprocs=args.world_size,
-            join=True,
-        )
+        try:
+            torch_mp.spawn(  # type: ignore
+                main,
+                args=(
+                    args.world_size,
+                    args.training_config_path,
+                    args.model_config_path,
+                    args.run_project,
+                    args.run_group,
+                    args.run_name,
+                    args.eval_first,
+                    args.test_run,
+                    args.device,
+                    args.checkpoints,
+                    args.reset_data_cache,
+                ),
+                nprocs=args.world_size,
+                join=True,
+            )
+        except KeyboardInterrupt:
+            print("\nTraining interrupted by user")
+        except Exception as e:
+            print(f"\nTraining failed with error: {e}")
+            raise

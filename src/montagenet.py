@@ -6,6 +6,7 @@ from torch import Tensor
 from torch.nn import functional as F
 import mne
 from rotary_embedding_torch import RotaryEmbedding
+from einops import rearrange, repeat
 
 from src.components.norm import RMSNorm
 from src.components.attention import MultiHeadAttention
@@ -68,7 +69,8 @@ class PerceiverResamplerBlock(nn.Module):
             rotary_embedding=rotary_embedding,
             dropout=dropout,
         )
-        self.attn_ln = RMSNorm(d_model)
+        self.latents_ln = RMSNorm(d_model)
+        self.source_ln = RMSNorm(d_model)
         self.mlp = nn.Sequential(
             GEGLU(d_model, d_mlp, bias=False),
             nn.Linear(d_mlp, d_model, bias=False),
@@ -82,12 +84,11 @@ class PerceiverResamplerBlock(nn.Module):
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
-        full_source = torch.cat([source, latents], dim=1)
-        full_source = self.attn_ln(full_source)
-        latents = full_source[:, -latents.shape[1] :, :]
+        latents = self.latents_ln(latents)
+        source = self.source_ln(source)
         latents = latents + self.cross_attn(
             latents,
-            full_source,
+            torch.cat([source, latents], dim=1),
             attention_mask=attention_mask,
             kv_cache=kv_cache,
         )
@@ -145,14 +146,27 @@ class EEGPerceiverResampler(nn.Module):
         )
         self.embed_positions = nn.Linear(3, d_model)
         self.embed_l_out = lambda T: int((T - emb_kernel_size) / emb_stride + 1)
-        rotary_embedding = RotaryEmbedding(dim=32, cache_max_seq_len=512)
+        rotary_embedding = RotaryEmbedding(dim=32, cache_max_seq_len=256)
         self.resampler_blocks = nn.ModuleList(
             [
                 PerceiverResamplerBlock(
                     d_model,
                     n_heads,
                     d_mlp,
-                    None,  # rotary_embedding,
+                    None,
+                    dropout,
+                    scale_exponent,
+                )
+                for _ in range(n_blocks)
+            ]
+        )
+        self.temporal_attn_blocks = nn.ModuleList(
+            [
+                TemporalAttentionBlock(
+                    d_model,
+                    n_heads,
+                    d_mlp,
+                    rotary_embedding,
                     dropout,
                     scale_exponent,
                 )
@@ -168,35 +182,81 @@ class EEGPerceiverResampler(nn.Module):
     ) -> Tensor:
         B, C, T = source.shape
         T_emb = T  # self.embed_l_out(T)
-        pos_emb = (
-            self.embed_positions(self.channel_positions)
-            .unsqueeze(0)
-            .unsqueeze(-1)
-            .expand(B, C, self.d_model, T_emb)
+        # Regenerate positional embeddings.
+        pos_emb = repeat(
+            self.embed_positions(self.channel_positions),
+            "C D -> B C D T_emb",
+            B=B,
+            T_emb=T_emb,
+            D=self.d_model,
         )
-        source = self.embed(source.reshape(B * C, 1, T)).reshape(
-            B, C, self.d_model, T_emb
+        # Embed EEG data.
+        source = rearrange(
+            self.embed(rearrange(source, "B C T -> (B C) 1 T")),
+            "(B C) D T_emb -> B C D T_emb",
+            B=B,
+            C=C,
+            D=self.d_model,
         )
-        source = (
-            (source + pos_emb).permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
+        source = rearrange(source + pos_emb, "B C D T_emb -> (B T_emb) C D")
+        # Initialize query latents
+        latents = repeat(
+            self.query_latents,
+            "L D -> (B T_emb) L D",
+            B=B,
+            T_emb=T_emb,
+            D=self.d_model,
+            L=self.n_latents,
         )
-        # source = source.permute(0, 3, 1, 2).reshape(B * T_emb, C, self.d_model)
-        latents = (
-            self.query_latents.clone()
-            .unsqueeze(0)
-            .expand(B * T_emb, self.n_latents, self.d_model)
-        )
-        for block in self.resampler_blocks:
-            latents = block(
+
+        for resampler_block, temporal_attn_block in zip(
+            self.resampler_blocks, self.temporal_attn_blocks
+        ):
+            latents = resampler_block(
                 latents,
                 source,
                 attention_mask=attention_mask,
                 kv_cache=kv_cache,
             )
+            latents = rearrange(
+                latents,
+                "(B T_emb) L D -> (B L) T_emb D",
+                B=B,
+                T_emb=T_emb,
+                L=self.n_latents,
+                D=self.d_model,
+            )
+            latents = temporal_attn_block(latents, kv_cache=kv_cache)
+            latents = rearrange(
+                latents,
+                "(B L) T_emb D -> (B T_emb) L D",
+                B=B,
+                L=self.n_latents,
+                T_emb=T_emb,
+                D=self.d_model,
+            )
+
         if self.pool_latents:
-            return latents.reshape(B, T_emb, self.n_latents * self.d_model).mean(1)
+            # Mean pool across time.
+            latents = rearrange(
+                latents,
+                "(B T_emb) L D -> B T_emb (L D)",
+                B=B,
+                T_emb=T_emb,
+                D=self.d_model,
+                L=self.n_latents,
+            )
+            return latents.mean(dim=1)  # Average across time dimension
         else:
-            return latents.reshape(B, T_emb * self.n_latents, self.d_model)
+            # Keep time dimension.
+            return rearrange(
+                latents,
+                "(B T_emb) L D -> B (T_emb L) D",
+                B=B,
+                T_emb=T_emb,
+                L=self.n_latents,
+                D=self.d_model,
+            )
 
 
 @dataclass
@@ -238,16 +298,10 @@ class MontageNet(nn.Module):
         # self.head = nn.Conv1d(config.d_model * config.n_latents, config.n_classes, 1)
         self.head = nn.Linear(config.d_model * config.n_latents, config.n_classes)
 
-    def forward(
-        self,
-        x: Tensor,
-    ):
-        latents = self.encoder(x)
-        return self.head(latents)
-
-    def step(self, batch: dict[str, Tensor]):
+    def forward(self, batch: dict[str, Tensor]):
         eeg, labels = batch["input_features"], batch["labels"]
-        logits = self(eeg)
+        latents = self.encoder(eeg)
+        logits = self.head(latents)
         labels = labels
         loss = F.cross_entropy(logits, labels)
         return loss, logits, labels

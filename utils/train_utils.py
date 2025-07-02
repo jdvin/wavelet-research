@@ -6,10 +6,13 @@ from typing import Any, Callable, Iterator
 import os
 import random
 from datetime import timedelta
+import atexit
+import signal
 
 from loguru import logger
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler, DistributedSampler
+import torch.distributed as dist
 from tqdm import tqdm
 import numpy as np
 import wandb
@@ -22,6 +25,86 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from src.montagenet import MontageNet, MontageNetConfig
 from utils.metrics import MetricManager
+
+
+from contextlib import suppress
+
+
+def list_grad_mismatches(model, atol=1e-6):
+    """
+    Waits for all DDP gradient all-reduces to finish, then checks each
+    parameter.  Prints a line for every .grad buffer that still differs
+    across ranks (RMS error > atol).
+    """
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    device = torch.device("cuda")
+
+    # ------------------------------------------------------------------
+    # 1.  Host-side sync: make sure all earlier collectives are queued
+    # ------------------------------------------------------------------
+    dist.barrier()  # default stream
+
+    # ------------------------------------------------------------------
+    # 2.  Device-side sync for *every* NCCL stream in this pg.
+    #     A dummy all-reduce forces stream-ordering across all NCCL streams.
+    # ------------------------------------------------------------------
+    dummy = torch.zeros(1, device=device)
+    dist.all_reduce(dummy, op=dist.ReduceOp.SUM)  # cannot launch until
+    # all grad all-reduces
+    # have completed
+
+    torch.cuda.synchronize()  # wait for GPU work
+
+    # ------------------------------------------------------------------
+    # 3.  Compare each parameter
+    # ------------------------------------------------------------------
+    mismatches = []
+
+    for name, param in model.named_parameters():
+        grad = param.grad
+        if grad is None:
+            # Parameter unused on this rank – ignore for mismatch report.
+            continue
+
+        # Clone local grad and compute the global average
+        g_local = grad.detach()
+        g_avg = g_local.clone()
+        dist.all_reduce(g_avg, op=dist.ReduceOp.AVG)
+
+        # Root-mean-square difference
+        sq_err = (g_local - g_avg).pow(2).sum()
+        dist.all_reduce(sq_err, op=dist.ReduceOp.AVG)
+        rms_err = (sq_err / g_local.numel()).sqrt()
+
+        if rms_err > atol:
+            mismatches.append(
+                (
+                    name,
+                    tuple(param.shape),
+                    grad.dtype,
+                    g_local.norm().item(),
+                    rms_err.item(),
+                )
+            )
+
+    # ------------------------------------------------------------------
+    # 4.  Print results (only if there are mismatches)
+    # ------------------------------------------------------------------
+    if mismatches:
+        header = f"\n[rank {rank}] Gradients that differ across ranks:"
+        print(header)
+        for n, shape, dtype, norm2, rms in mismatches:
+            print(
+                f"   ✗ {n:<35}  shape={shape}  "
+                f"dtype={dtype}  ||grad||₂={norm2:8.3e}  "
+                f"rms diff={rms:8.3e}"
+            )
+        print()
+
+    # Optional hard assertion: trip only once (rank 0) to avoid log spam
+    if mismatches:
+        raise RuntimeError("Some gradients still differ across ranks.")
 
 
 @dataclass
@@ -109,6 +192,9 @@ def setup(
 ):
     """Setup the environment for training."""
     torch.manual_seed(42 + rank)
+    torch.cuda.manual_seed(42 + rank)
+    torch.cuda.manual_seed_all(42 + rank)
+    np.random.seed(42 + rank)
     random.seed(42 + rank)
     if rank != 0:
         # Suppress output from all ranks except rank 0.
@@ -142,9 +228,36 @@ def setup(
         )
 
 
+_cleanup_called = False
+
+
 def cleanup(world_size: int):
+    global _cleanup_called
+    if _cleanup_called:
+        return
+    _cleanup_called = True
+
     if world_size > 1:
-        torch.distributed.destroy_process_group()
+        try:
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+        except Exception:
+            pass  # Ignore errors during cleanup
+
+
+def register_cleanup_handlers(world_size: int):
+    """Register cleanup handlers for graceful shutdown."""
+
+    def cleanup_handler(*args):
+        cleanup(world_size)
+        os._exit(0)  # Force exit without running other atexit handlers
+
+    # Only register signal handlers (remove atexit to avoid conflicts)
+    for sig in [signal.SIGTERM, signal.SIGINT]:
+        try:
+            signal.signal(sig, cleanup_handler)
+        except (OSError, ValueError):
+            pass
 
 
 def format_number(number: int) -> str:
@@ -237,6 +350,13 @@ def configure_optimizers(
     return optimizer, scheduler
 
 
+def worker_init_fn(worker_id: int, rank: int = 0) -> None:
+    """Initialize DataLoader worker with deterministic seeds."""
+    worker_seed = 42 + rank * 1000 + worker_id
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 def get_dataloaders(
     dataset: dict[str, Dataset],
     train_microbatch_size: int,
@@ -251,10 +371,12 @@ def get_dataloaders(
             dataset["train"], num_replicas=world_size, rank=rank, shuffle=True
         )
         val_sampler = DistributedSampler(
-            dataset["val"], num_replicas=world_size, rank=rank, shuffle=True
+            dataset["val"], num_replicas=world_size, rank=rank, shuffle=False
         )
     else:
         train_sampler, val_sampler = None, None
+    from functools import partial
+
     train_dataloader = DataLoader(
         dataset["train"],  # type: ignore
         batch_size=train_microbatch_size,
@@ -262,6 +384,7 @@ def get_dataloaders(
         sampler=train_sampler,
         collate_fn=train_collate_fn,
         num_workers=2,
+        worker_init_fn=partial(worker_init_fn, rank=rank),
     )
     val_dataloader = DataLoader(
         dataset["val"],  # type: ignore
@@ -270,6 +393,7 @@ def get_dataloaders(
         sampler=val_sampler,
         collate_fn=val_collate_fn,
         num_workers=2,
+        worker_init_fn=partial(worker_init_fn, rank=rank),
     )
     return train_dataloader, train_sampler, val_dataloader, val_sampler
 
@@ -307,7 +431,7 @@ def run_eval(
     accum_loss = torch.tensor([0.0], device=device)
     for _ in range(len(val_dataloader)):
         micro_batch = get_microbatch(val_dataloader_iterator, device, dtype)
-        loss, logits, labels = model.step(micro_batch)
+        loss, logits, labels = model(micro_batch)
         accum_loss += loss.item() / len(val_dataloader)
 
         val_pbar.update()

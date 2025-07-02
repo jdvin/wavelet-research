@@ -1,8 +1,8 @@
-n_latents: 4
-d_model: 1024
+n_latents: 1
+d_model: 512
 n_heads: 8
-d_mlp: 2048
+d_mlp: 1024
 dropout: 0.0
 scale_exponent: -0.25
 pool_latents: True 
-n_blocks: 4
+n_blocks: 2
