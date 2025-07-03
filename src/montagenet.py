@@ -198,8 +198,8 @@ class EEGPerceiverResampler(nn.Module):
             C=C,
             D=self.d_model,
         )
-        # source = rearrange(source + pos_emb, "B C D T_emb -> (B T_emb) C D")
-        source = rearrange(source, "B C D T_emb -> (B T_emb) C D")
+        source = rearrange(source + pos_emb, "B C D T_emb -> (B T_emb) C D")
+        # source = rearrange(source, "B C D T_emb -> (B T_emb) C D")
         # Initialize query latents
         latents = repeat(
             self.query_latents,
