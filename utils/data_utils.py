@@ -418,13 +418,17 @@ SESSION_TO_TASK = {
 
 
 class Annotation(Enum):
-    EYES_OPEN = "e_open"
-    EYES_CLOSED = "e_clos"
-    REST = "b_rest"
-    LEFT_FIST = "l_fist"
-    RIGHT_FIST = "r_fist"
-    BOTH_FIST = "b_fist"
-    BOTH_FEET = "b_feet"
+    EYES_OPEN = "base_e_open"
+    EYES_CLOSED = "base_e_clos"
+    REST = "base_b_rest"
+    MOVE_LEFT_FIST = "move_l_fist"
+    MOVE_RIGHT_FIST = "move_r_fist"
+    MOVE_BOTH_FIST = "move_b_fist"
+    MOVE_BOTH_FEET = "move_b_feet"
+    IMAG_LEFT_FIST = "imag_l_fist"
+    IMAG_RIGHT_FIST = "imag_r_fist"
+    IMAG_BOTH_FIST = "imag_b_fist"
+    IMAG_BOTH_FEET = "imag_b_feet"
 
 
 ANNOTATION_CODE_MAP: dict[int, dict[str, Annotation]] = {
@@ -436,63 +440,63 @@ ANNOTATION_CODE_MAP: dict[int, dict[str, Annotation]] = {
     },
     3: {
         "T0": Annotation.REST,
-        "T1": Annotation.LEFT_FIST,
-        "T2": Annotation.RIGHT_FIST,
+        "T1": Annotation.MOVE_LEFT_FIST,
+        "T2": Annotation.MOVE_RIGHT_FIST,
     },
     4: {
         "T0": Annotation.REST,
-        "T1": Annotation.LEFT_FIST,
-        "T2": Annotation.RIGHT_FIST,
+        "T1": Annotation.IMAG_LEFT_FIST,
+        "T2": Annotation.IMAG_RIGHT_FIST,
     },
     5: {
         "T0": Annotation.REST,
-        "T1": Annotation.BOTH_FIST,
-        "T2": Annotation.BOTH_FEET,
+        "T1": Annotation.MOVE_BOTH_FIST,
+        "T2": Annotation.MOVE_BOTH_FEET,
     },
     6: {
         "T0": Annotation.REST,
-        "T1": Annotation.BOTH_FIST,
-        "T2": Annotation.BOTH_FEET,
+        "T1": Annotation.IMAG_BOTH_FIST,
+        "T2": Annotation.IMAG_BOTH_FEET,
     },
     7: {
         "T0": Annotation.REST,
-        "T1": Annotation.LEFT_FIST,
-        "T2": Annotation.RIGHT_FIST,
+        "T1": Annotation.MOVE_LEFT_FIST,
+        "T2": Annotation.MOVE_RIGHT_FIST,
     },
     8: {
         "T0": Annotation.REST,
-        "T1": Annotation.LEFT_FIST,
-        "T2": Annotation.RIGHT_FIST,
+        "T1": Annotation.IMAG_LEFT_FIST,
+        "T2": Annotation.IMAG_RIGHT_FIST,
     },
     9: {
         "T0": Annotation.REST,
-        "T1": Annotation.BOTH_FIST,
-        "T2": Annotation.BOTH_FEET,
+        "T1": Annotation.MOVE_BOTH_FIST,
+        "T2": Annotation.MOVE_BOTH_FEET,
     },
     10: {
         "T0": Annotation.REST,
-        "T1": Annotation.BOTH_FIST,
-        "T2": Annotation.BOTH_FEET,
+        "T1": Annotation.IMAG_BOTH_FIST,
+        "T2": Annotation.IMAG_BOTH_FEET,
     },
     11: {
         "T0": Annotation.REST,
-        "T1": Annotation.LEFT_FIST,
-        "T2": Annotation.RIGHT_FIST,
+        "T1": Annotation.MOVE_LEFT_FIST,
+        "T2": Annotation.MOVE_RIGHT_FIST,
     },
     12: {
         "T0": Annotation.REST,
-        "T1": Annotation.LEFT_FIST,
-        "T2": Annotation.RIGHT_FIST,
+        "T1": Annotation.IMAG_LEFT_FIST,
+        "T2": Annotation.IMAG_RIGHT_FIST,
     },
     13: {
         "T0": Annotation.REST,
-        "T1": Annotation.BOTH_FIST,
-        "T2": Annotation.BOTH_FEET,
+        "T1": Annotation.MOVE_BOTH_FIST,
+        "T2": Annotation.MOVE_BOTH_FEET,
     },
     14: {
         "T0": Annotation.REST,
-        "T1": Annotation.BOTH_FIST,
-        "T2": Annotation.BOTH_FEET,
+        "T1": Annotation.IMAG_BOTH_FIST,
+        "T2": Annotation.IMAG_BOTH_FEET,
     },
 }
 
@@ -579,7 +583,7 @@ def extract_eeg_mmi_session_data(
         filename=os.path.join(output_path, f"{subject_str}{session_str}_labels.npy"),
         mode="r" if cached else "w+",
         shape=(len(events),),
-        dtype="<U6",
+        dtype="<U11",
     )
     if cached:
         return session_eeg, session_labels
@@ -637,7 +641,7 @@ def extract_eeg_mmi_split(
     )
     split_labels = np.zeros(
         shape=(n_trials),
-        dtype="<U6",
+        dtype="<U11",
     )
     cum_trial = 0
     for shape, eeg, label in zip(shapes, eegs, labels):

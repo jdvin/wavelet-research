@@ -296,8 +296,12 @@ class MontageNet(nn.Module):
             config.dropout,
             config.scale_exponent,
         )
-        # self.head = nn.Conv1d(config.d_model * config.n_latents, config.n_classes, 1)
-        self.head = nn.Linear(config.d_model * config.n_latents, config.n_classes)
+        if config.pool_latents:
+            self.head = nn.Linear(config.d_model * config.n_latents, config.n_classes)
+        else:
+            self.head = nn.Conv1d(
+                config.d_model * config.n_latents, config.n_classes, 1
+            )
 
     def forward(self, batch: dict[str, Tensor]):
         eeg, labels = batch["input_features"], batch["labels"]
