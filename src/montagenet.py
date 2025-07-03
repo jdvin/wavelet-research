@@ -198,7 +198,8 @@ class EEGPerceiverResampler(nn.Module):
             C=C,
             D=self.d_model,
         )
-        source = rearrange(source + pos_emb, "B C D T_emb -> (B T_emb) C D")
+        # source = rearrange(source + pos_emb, "B C D T_emb -> (B T_emb) C D")
+        source = rearrange(source, "B C D T_emb -> (B T_emb) C D")
         # Initialize query latents
         latents = repeat(
             self.query_latents,
@@ -261,16 +262,16 @@ class EEGPerceiverResampler(nn.Module):
 
 @dataclass
 class MontageNetConfig:
+    n_latents: int
+    d_model: int
+    n_heads: int
+    d_mlp: int
+    dropout: float
+    scale_exponent: float
+    pool_latents: bool
+    n_blocks: int
+    n_classes: int
     data_config: EEGDataConfig = field(default_factory=EEGDataConfig)
-    n_latents: int = 1
-    d_model: int = 1024
-    n_heads: int = 8
-    d_mlp: int = 2048
-    dropout: float = 0.0
-    scale_exponent: float = -0.25
-    pool_latents: bool = True
-    n_blocks: int = 4
-    n_classes: int = 2
 
 
 class MontageNet(nn.Module):

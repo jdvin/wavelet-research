@@ -150,12 +150,31 @@ def main(
         )
 
     logger.info("Creating data loaders.")
-    region_mask = None
-    # torch.tensor(get_region_mask(
-    #     model.module.data_config.channel_positions.numpy(), []  # [Region.OCCIPITAL]
-    # ))
-    train_collate_fn = get_eeg_mmi_collate_fn(mask=region_mask)
-    val_collate_fn = get_eeg_mmi_collate_fn(mask=region_mask)
+    occipital_electrodes = (
+        torch.tensor(
+            get_region_mask(
+                model.module.data_config.channel_positions.numpy(),
+                [Region.FRONTAL, Region.OCCIPITAL],
+            )
+        )
+        .unsqueeze(0)
+        .unsqueeze(-1)
+    )
+    frontal_electrodes = (
+        torch.tensor(
+            get_region_mask(
+                model.module.data_config.channel_positions.numpy(),
+                [Region.PARIETAL, Region.TEMPORAL],
+            )
+        )
+        .unsqueeze(0)
+        .unsqueeze(-1)
+    )
+    # train_mask = get_nth_mask(model.module.data_config.max_channels, 2, 1)
+    # val_mask = get_nth_mask(model.module.data_config.max_channels, 2, 2)
+
+    train_collate_fn = get_eeg_mmi_collate_fn(mask=frontal_electrodes)
+    val_collate_fn = get_eeg_mmi_collate_fn(mask=occipital_electrodes)
     # Create data loaders.
     (
         train_dataloader,

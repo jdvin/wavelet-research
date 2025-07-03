@@ -337,7 +337,10 @@ def main():
     # Plot multiple montages with different colors
     # montage_names = ["GSN-HydroCel-129"]  # Default single montage
     # Example of multiple montages:
-    full_montage = get_montage("GSN-HydroCel-129")
+    dig_montage = physionet_64_montage().get_positions()["ch_pos"]
+    full_montage = Montage(
+        "phsyionet-64", list(dig_montage.keys()), np.array(list(dig_montage.values()))
+    )
     occipital = mask_regions(full_montage, [Region.OCCIPITAL])
     parietal = mask_regions(full_montage, [Region.PARIETAL])
     temporal = mask_regions(full_montage, [Region.TEMPORAL])

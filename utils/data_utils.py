@@ -285,7 +285,7 @@ def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
 def get_nth_mask(size: int, n: int, offset: int = 1) -> torch.Tensor:
     mask = torch.ones(size)
     mask[offset - 1 :: n] = False
-    return mask.unsqueeze(0).unsqueeze(0)
+    return mask.unsqueeze(0).unsqueeze(-1)
 
 
 def eeg_mmi_collate_fn(
