@@ -41,7 +41,6 @@ from utils.train_utils import (
     get_validation_step_indexes,
     get_dataloader_iterator,
     TrainingConfig,
-    list_grad_mismatches,
 )
 
 from utils.metrics import (
@@ -150,7 +149,7 @@ def main(
         )
 
     logger.info("Creating data loaders.")
-    occipital_electrodes = (
+    fronto_occipital_electrodes = (
         torch.tensor(
             get_region_mask(
                 model.module.data_config.channel_positions.numpy(),
@@ -160,7 +159,7 @@ def main(
         .unsqueeze(0)
         .unsqueeze(-1)
     )
-    frontal_electrodes = (
+    temporo_parietal_electrodes = (
         torch.tensor(
             get_region_mask(
                 model.module.data_config.channel_positions.numpy(),
@@ -173,8 +172,8 @@ def main(
     # train_mask = get_nth_mask(model.module.data_config.max_channels, 2, 1)
     # val_mask = get_nth_mask(model.module.data_config.max_channels, 2, 2)
 
-    train_collate_fn = get_eeg_mmi_collate_fn(mask=frontal_electrodes)
-    val_collate_fn = get_eeg_mmi_collate_fn(mask=occipital_electrodes)
+    train_collate_fn = get_eeg_mmi_collate_fn(mask=temporo_parietal_electrodes)
+    val_collate_fn = get_eeg_mmi_collate_fn(mask=fronto_occipital_electrodes)
     # Create data loaders.
     (
         train_dataloader,
