@@ -288,7 +288,15 @@ class Metric:
 
 @dataclass
 class MetricManager:
-    def __init__(self, device, world_size, batch_size, is_main_process, log_interval):
+    def __init__(
+        self,
+        device: str | int,
+        world_size: int,
+        batch_size: int,
+        is_main_process: bool,
+        log_interval: float,
+        validation_dataset_keys: list[str],
+    ):
         self.is_main_process = is_main_process
         self.log_interval = log_interval
         self.batch_size = batch_size
@@ -355,23 +363,7 @@ class MetricManager:
             device=device,
             world_size=world_size,
         )
-        self.val_loss = Metric(
-            "val/loss",
-            tensor([0.0]),
-            log_every_step=False,
-            device=device,
-            world_size=world_size,
-        )
-        self.val_accuracy = Metric(
-            "val/accuracy",
-            tensor([0.0]),
-            transform_fn=get_accuracy_simple,
-            reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
-            compute_fn=divide,
-            log_every_step=False,
-            device=device,
-            world_size=world_size,
-        )
+
         self.throughput = Metric(
             "train/samples_per_sec",
             tensor(0.0),
@@ -398,11 +390,39 @@ class MetricManager:
             device=device,
             world_size=world_size,
         )
+        self.val = {
+            key: {
+                "loss": Metric(
+                    f"val/{key}/loss",
+                    tensor([0.0]),
+                    log_every_step=False,
+                    device=device,
+                    world_size=world_size,
+                ),
+                "accuracy": Metric(
+                    f"val/{key}/accuracy",
+                    tensor([0.0]),
+                    transform_fn=get_accuracy_simple,
+                    reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
+                    compute_fn=divide,
+                    log_every_step=False,
+                    device=device,
+                    world_size=world_size,
+                ),
+            }
+            for key in validation_dataset_keys
+        }
 
     def log(self):
         if not self.step.value % self.log_interval == 0:
             return
         for key, metric in self.__dict__.items():
+            # TODO: GRoss, fix!.
+            if isinstance(metric, dict):
+                for sub_key, sub_metric in metric.items():
+                    if sub_metric.log_every_step:
+                        sub_metric.log()
+
             if not isinstance(metric, Metric):
                 continue
             if metric.log_every_step:

@@ -123,7 +123,7 @@ def main(
             subjects=list(range(1, 100)),
             sessions=[1, 2],
         ),
-        "val": EEGMMISplit(
+        "eyes_val": EEGMMISplit(
             name="val",
             subjects=list(range(100, 110)),
             sessions=[1, 2],
@@ -179,8 +179,8 @@ def main(
     (
         train_dataloader,
         train_sampler,
-        val_dataloader,
-        val_sampler,
+        val_dataloaders,
+        val_samplers,
     ) = get_dataloaders(
         ds,  # type: ignore
         cfg.train_micro_batch_size,
@@ -219,6 +219,7 @@ def main(
         is_main_process=is_main_process,
         log_interval=cfg.log_interval,
         batch_size=cfg.batch_size,
+        validation_dataset_keys=list(val_dataloaders.keys()),
     )
 
     metrics.lr.update(lr_scheduler.get_last_lr()[0])
@@ -239,8 +240,8 @@ def main(
     if eval_first:
         run_eval(
             model=model.module,
-            val_dataloader=val_dataloader,
-            val_sampler=val_sampler,
+            val_dataloaders=val_dataloaders,
+            val_samplers=val_samplers,
             metrics=metrics,
             device=rank,
             dtype=torch_dtype,
@@ -302,8 +303,8 @@ def main(
             torch.cuda.empty_cache()
             run_eval(
                 model=model.module,
-                val_dataloader=val_dataloader,
-                val_sampler=val_sampler,
+                val_dataloaders=val_dataloaders,
+                val_samplers=val_samplers,
                 metrics=metrics,
                 device=rank,
                 dtype=torch_dtype,

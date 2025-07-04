@@ -116,6 +116,12 @@ class EEGDataConfig:
         return self.channel_positions.shape[0]
 
 
+@dataclass
+class TaskConfig:
+    key: str
+    n_classes: int
+
+
 class EEGPerceiverResampler(nn.Module):
     def __init__(
         self,
@@ -271,6 +277,7 @@ class MontageNetConfig:
     pool_latents: bool
     n_blocks: int
     n_classes: int
+    tasks: list[TaskConfig]
     data_config: EEGDataConfig = field(default_factory=EEGDataConfig)
 
 
@@ -296,23 +303,39 @@ class MontageNet(nn.Module):
             config.dropout,
             config.scale_exponent,
         )
-        if config.pool_latents:
-            self.head = nn.Linear(config.d_model * config.n_latents, config.n_classes)
-        else:
-            self.head = nn.Conv1d(
-                config.d_model * config.n_latents, config.n_classes, 1
-            )
+        # TODO: This will be slow, but we can optimise later.
+        self.task_heads = nn.ModuleDict(
+            {
+                task.key: nn.Linear(config.d_model * config.n_latents, task.n_classes)
+                if config.pool_latents
+                else nn.Conv1d(config.d_model * config.n_latents, task.n_classes, 1)
+                for task in config.tasks
+            }
+        )
 
-    def forward(self, batch: dict[str, Tensor]):
-        eeg, labels = batch["input_features"], batch["labels"]
+    def forward(self, batch: dict[str, list[str] | Tensor]):
+        task_keys, eeg, labels = (
+            batch["tasks"],
+            batch["input_features"],
+            batch["labels"],
+        )
+        assert isinstance(labels, Tensor)
+        assert isinstance(task_keys, list)
         latents = self.encoder(eeg)
-        logits = self.head(latents)
-        labels = labels
-        loss = F.cross_entropy(logits, labels)
+        logits = torch.stack(
+            [
+                self.task_heads[task_key](latent)
+                for task_key, latent in zip(task_keys, latents)
+            ],
+        )
+        loss = torch.stack(
+            [F.cross_entropy(logit, label) for logit, label in zip(logits, labels)]
+        ).mean()
         return loss, logits, labels
 
     @property
     def module(self):
+        """For interoperability with DDP"""
         return self
 
     def optim_groups(self, weight_decay: float = 1e-1) -> list[dict[str, str]]:

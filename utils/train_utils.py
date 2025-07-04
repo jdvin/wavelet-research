@@ -365,16 +365,27 @@ def get_dataloaders(
     world_size: int,
     train_collate_fn: Callable[[list], dict],
     val_collate_fn: Callable[[list], dict],
-) -> tuple[DataLoader, Sampler | None, DataLoader, Sampler | None]:
+) -> tuple[
+    DataLoader,
+    Sampler | None,
+    dict[str, DataLoader],
+    dict[str, Sampler] | dict[str, DistributedSampler] | dict[str, None],
+]:
     if world_size > 1:
         train_sampler = DistributedSampler(
             dataset["train"], num_replicas=world_size, rank=rank, shuffle=True
         )
-        val_sampler = DistributedSampler(
-            dataset["val"], num_replicas=world_size, rank=rank, shuffle=False
-        )
+        val_samplers = {
+            key: DistributedSampler(
+                ds, num_replicas=world_size, rank=rank, shuffle=False
+            )
+            for key, ds in dataset.items()
+            if key.endswith("_val")
+        }
     else:
-        train_sampler, val_sampler = None, None
+        train_sampler, val_samplers = None, {
+            key: None for key in dataset.keys() if key.endswith("_val")
+        }
     from functools import partial
 
     train_dataloader = DataLoader(
@@ -386,16 +397,20 @@ def get_dataloaders(
         num_workers=2,
         worker_init_fn=partial(worker_init_fn, rank=rank),
     )
-    val_dataloader = DataLoader(
-        dataset["val"],  # type: ignore
-        batch_size=val_microbatch_size,
-        shuffle=val_sampler is None,
-        sampler=val_sampler,
-        collate_fn=val_collate_fn,
-        num_workers=2,
-        worker_init_fn=partial(worker_init_fn, rank=rank),
-    )
-    return train_dataloader, train_sampler, val_dataloader, val_sampler
+    val_dataloaders = {
+        key: DataLoader(
+            ds,  # type: ignore
+            batch_size=val_microbatch_size,
+            shuffle=sampler is None,
+            sampler=sampler,
+            collate_fn=val_collate_fn,
+            num_workers=2,
+            worker_init_fn=partial(worker_init_fn, rank=rank),
+        )
+        for (key, ds), sampler in zip(dataset.items(), val_samplers.values())
+        if key.endswith("_val")
+    }
+    return train_dataloader, train_sampler, val_dataloaders, val_samplers
 
 
 def get_dataloader_iterator(
@@ -411,36 +426,40 @@ def get_dataloader_iterator(
 @torch.no_grad()
 def run_eval(
     model: MontageNet,
-    val_dataloader: DataLoader,
-    val_sampler: Sampler | None,
+    val_dataloaders: dict[str, DataLoader],
+    val_samplers: dict[str, DistributedSampler] | dict[str, Sampler] | dict[str, None],
     metrics: MetricManager,
     device: str | int,
     dtype: torch.dtype,
 ):
     """Run evaluation on the validation sets."""
     model.eval()
-    val_pbar = tqdm(
-        total=len(val_dataloader),
-        desc="Running validation.",
-        leave=False,
-        disable=device not in {0, "cuda:0", "cuda"},
-    )
-    val_dataloader_iterator = get_dataloader_iterator(
-        val_dataloader, val_sampler, metrics.epoch.value
-    )
-    accum_loss = torch.tensor([0.0], device=device)
-    for _ in range(len(val_dataloader)):
-        micro_batch = get_microbatch(val_dataloader_iterator, device, dtype)
-        loss, logits, labels = model(micro_batch)
-        accum_loss += loss.item() / len(val_dataloader)
+    for (dl_key, val_dataloader), (sampler_key, val_sampler) in zip(
+        val_dataloaders.items(), val_samplers.items()
+    ):
+        assert dl_key == sampler_key
+        val_pbar = tqdm(
+            total=len(val_dataloader),
+            desc="fRunning validation: {dl_key}.",
+            leave=False,
+            disable=device not in {0, "cuda:0", "cuda"},
+        )
+        val_dataloader_iterator = get_dataloader_iterator(
+            val_dataloader, val_sampler, metrics.epoch.value
+        )
+        accum_loss = torch.tensor([0.0], device=device)
+        for _ in range(len(val_dataloader)):
+            micro_batch = get_microbatch(val_dataloader_iterator, device, dtype)
+            loss, logits, labels = model(micro_batch)
+            accum_loss += loss.item() / len(val_dataloader)
 
-        val_pbar.update()
-        out = {"logits": logits, "labels": labels}
-        metrics.val_accuracy.update(out)
-    metrics.val_accuracy.log()
+            val_pbar.update()
+            out = {"logits": logits, "labels": labels}
+            metrics.val[dl_key]["accuracy"].update(out)
+        metrics.val[dl_key]["accuracy"].log()
 
-    metrics.val_loss.update(accum_loss)
-    metrics.val_loss.log()
-    del accum_loss
+        metrics.val[dl_key]["loss"].update(accum_loss)
+        metrics.val[dl_key]["loss"].log()
+        del accum_loss
     torch.cuda.empty_cache()
     model.train()

@@ -37,5 +37,7 @@ class MappedLabelDataset(Dataset):
     def __len__(self):
         return len(self.labels)
 
-    def __getitem__(self, index: int) -> tuple[np.ndarray, int]:
-        return self.inputs[index], self.labels_map[self.labels[index].item()]
+    def __getitem__(self, index: int) -> tuple[int, np.ndarray, int]:
+        input = self.inputs[index]
+        task, label = self.labels[index]
+        return task, input, label

@@ -289,17 +289,20 @@ def get_nth_mask(size: int, n: int, offset: int = 1) -> torch.Tensor:
 
 
 def eeg_mmi_collate_fn(
-    samples: list[tuple[np.memmap, list[int]]],
+    samples: list[tuple[int, np.memmap, int]],
     mask: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     # TODO: This is slow AF and should definitely be done on the GPU.
-    input_features, labels = [], []
+    tasks, input_features, labels = [], [], []
     for sample in samples:
-        input_features.append(sample[0])
-        labels.append(sample[1])
+        tasks.append(sample[0])
+        input_features.append(sample[1])
+        labels.append(sample[2])
+    tasks_tensor = torch.tensor(tasks)
     input_features_tensor = torch.tensor(np.array(input_features))
     labels_tensor = torch.tensor(labels)
     return {
+        "tasks": tasks_tensor,
         "input_features": input_features_tensor * mask
         if mask is not None
         else input_features_tensor,
@@ -393,10 +396,10 @@ def get_things_100ms_collate_fn(
 class EEGMMITask(Enum):
     BASELINE_EYES_OPEN = "baseline_eyes_open"
     BASELINE_EYES_CLOSED = "baseline_eyes_closed"
-    TASK_1 = "task_1_move_left_right_fist"
-    TASK_2 = "task_2_imag_left_right_fist"
-    TASK_3 = "task_3_move_fists_feet"
-    TASK_4 = "task_4_imag_fists_feet"
+    TASK_1 = "m_l__r_fist"
+    TASK_2 = "i_l__r_fist"
+    TASK_3 = "m_fist_feet"
+    TASK_4 = "i_fist_feet"
 
 
 SESSION_TO_TASK = {
@@ -582,7 +585,7 @@ def extract_eeg_mmi_session_data(
     session_labels = np.memmap(
         filename=os.path.join(output_path, f"{subject_str}{session_str}_labels.npy"),
         mode="r" if cached else "w+",
-        shape=(len(events),),
+        shape=(len(events), 2),
         dtype="<U11",
     )
     if cached:
@@ -601,9 +604,10 @@ def extract_eeg_mmi_session_data(
         event_stop = next_event[0]
         event_duration = event_stop - event_start
         annotation_code = labels_to_annotations[current_event[2]]
-        annotation = ANNOTATION_CODE_MAP[session][annotation_code.item()]
+        task = SESSION_TO_TASK[session].value
+        annotation = ANNOTATION_CODE_MAP[session][annotation_code.item()].value
         session_eeg[i, :, 0:event_duration] = eeg_data[:, event_start:event_stop]
-        session_labels[i] = annotation.value
+        session_labels[i, :] = [task, annotation]
 
     session_eeg.flush()
     session_labels.flush()
