@@ -29,8 +29,10 @@ class MappedLabelDataset(Dataset):
         inputs: np.memmap,
         labels: np.memmap,
         labels_map: dict[str, int],
+        tasks_map: dict[str, int],
     ):
         self.labels_map = labels_map
+        self.tasks_map = tasks_map
         self.inputs = inputs
         self.labels = labels
 
@@ -40,4 +42,4 @@ class MappedLabelDataset(Dataset):
     def __getitem__(self, index: int) -> tuple[int, np.ndarray, int]:
         input = self.inputs[index]
         task, label = self.labels[index]
-        return task, input, label
+        return self.tasks_map[task], input, self.labels_map[label]

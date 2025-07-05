@@ -304,13 +304,13 @@ class MontageNet(nn.Module):
             config.scale_exponent,
         )
         # TODO: This will be slow, but we can optimise later.
-        self.task_heads = nn.ModuleDict(
-            {
-                task.key: nn.Linear(config.d_model * config.n_latents, task.n_classes)
+        self.task_heads = nn.ModuleList(
+            [
+                nn.Linear(config.d_model * config.n_latents, task.n_classes)
                 if config.pool_latents
                 else nn.Conv1d(config.d_model * config.n_latents, task.n_classes, 1)
                 for task in config.tasks
-            }
+            ]
         )
 
     def forward(self, batch: dict[str, list[str] | Tensor]):

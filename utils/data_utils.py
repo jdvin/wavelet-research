@@ -626,7 +626,7 @@ def extract_eeg_mmi_split(
         return np.load(eeg_path, mmap_mode="r", allow_pickle=True), np.load(
             labels_path, mmap_mode="r", allow_pickle=True
         )
-    eegs, labels = [], []
+    eegs, task_labels = [], []
     shapes = np.zeros((len(split.subjects) * len(split.sessions), 3), dtype=int)
     for i, subject in enumerate(split.subjects):
         for j, session in enumerate(split.sessions):
@@ -634,7 +634,7 @@ def extract_eeg_mmi_split(
                 base_path, output_path, subject, session, reset_cache
             )
             eegs.append(eeg)
-            labels.append(label)
+            task_labels.append(label)
             shapes[i * len(split.sessions) + j] = eeg.shape
     n_trials = int(shapes[:, 0].sum())
     n_channels = int(shapes[:, 1].max())
@@ -644,13 +644,13 @@ def extract_eeg_mmi_split(
         dtype=eegs[0].dtype,
     )
     split_labels = np.zeros(
-        shape=(n_trials),
+        shape=(n_trials, 2),
         dtype="<U11",
     )
     cum_trial = 0
-    for shape, eeg, label in zip(shapes, eegs, labels):
+    for shape, eeg, task_label in zip(shapes, eegs, task_labels):
         split_eeg[cum_trial : cum_trial + shape[0], 0 : shape[1], 0 : shape[2]] = eeg
-        split_labels[cum_trial : cum_trial + shape[0]] = label
+        split_labels[cum_trial : cum_trial + shape[0]] = task_label
         cum_trial += shape[0]
 
     np.save(eeg_path, split_eeg)

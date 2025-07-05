@@ -47,7 +47,7 @@ from utils.metrics import (
     MetricManager,
 )
 
-from src.montagenet import MontageNetConfig, MontageNet
+from src.montagenet import MontageNetConfig, MontageNet, TaskConfig
 
 
 def main(
@@ -77,7 +77,9 @@ def main(
         checkpoints=checkpoints,
     )
     grad_accum_steps = cfg.batch_size // (cfg.train_micro_batch_size * cfg.world_size)
-    model_config = MontageNetConfig(**load_yaml(model_config_path))
+    model_config = MontageNetConfig(
+        **load_yaml(model_config_path), tasks=[TaskConfig(key="eyes", n_classes=2)]
+    )
 
     setup(
         rank=rank,
@@ -96,7 +98,6 @@ def main(
     is_main_process = rank == 0
     logger.info("Creating model instance.")
     # Create model.
-    model_config = MontageNetConfig(**load_yaml(model_config_path))
     model: MontageNet = MontageNet(model_config, rank, world_size)
 
     torch_dtype = {
