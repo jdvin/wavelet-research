@@ -394,8 +394,8 @@ def get_things_100ms_collate_fn(
 
 
 class EEGMMITask(Enum):
-    BASELINE_EYES_OPEN = "baseline_eyes_open"
-    BASELINE_EYES_CLOSED = "baseline_eyes_closed"
+    BASELINE_EYES_OPEN = "m_eyes_open"
+    BASELINE_EYES_CLOSED = "m_eyes_clos"
     TASK_1 = "m_l__r_fist"
     TASK_2 = "i_l__r_fist"
     TASK_3 = "m_fist_feet"
@@ -665,6 +665,7 @@ def get_eeg_mmi_dataset(
     output_path: str,
     splits: dict[str, EEGMMISplit],
     labels_map: dict[str, int],
+    tasks_map: dict[str, int],
     reset_cache: bool = False,
 ) -> dict[str, np.memmap]:
     ret = {}
@@ -673,6 +674,6 @@ def get_eeg_mmi_dataset(
         split_eeg, split_labels = extract_eeg_mmi_split(
             source_base_path, split, output_path, reset_cache
         )
-        dataset = MappedLabelDataset(split_eeg, split_labels, labels_map)
+        dataset = MappedLabelDataset(split_eeg, split_labels, labels_map, tasks_map)
         ret[split_name] = dataset
     return ret

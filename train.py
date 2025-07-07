@@ -135,6 +135,7 @@ def main(
             output_path="data",
             splits=splits,
             labels_map={"e_open": 0, "e_clos": 1},
+            tasks_map={"m_eyes_open": 0, "m_eyes_clos": 0},
             reset_cache=reset_data_cache,
         )
         if world_size > 1:
@@ -146,6 +147,7 @@ def main(
             output_path="data",
             splits=splits,
             labels_map={"e_open": 0, "e_clos": 1},
+            tasks_map={"m_eyes_open": 0, "m_eyes_clos": 0},
             reset_cache=reset_data_cache,
         )
 

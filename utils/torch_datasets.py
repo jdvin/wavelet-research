@@ -41,5 +41,6 @@ class MappedLabelDataset(Dataset):
 
     def __getitem__(self, index: int) -> tuple[int, np.ndarray, int]:
         input = self.inputs[index]
-        task, label = self.labels[index]
+        task, label = self.labels[index, :]
+        print(task, label)
         return self.tasks_map[task], input, self.labels_map[label]
