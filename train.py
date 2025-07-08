@@ -134,7 +134,7 @@ def main(
             source_base_path=cfg.dataset_path,
             output_path="data",
             splits=splits,
-            labels_map={"e_open": 0, "e_clos": 1},
+            labels_map={"base_e_open": 0, "base_e_clos": 1},
             tasks_map={"m_eyes_open": 0, "m_eyes_clos": 0},
             reset_cache=reset_data_cache,
         )

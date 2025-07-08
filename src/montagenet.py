@@ -98,12 +98,7 @@ class PerceiverResamplerBlock(nn.Module):
 
 @dataclass
 class EEGDataConfig:
-    # N_channels x 3 tensor of electrode positions normalised to [-1, 1]
-    channel_positions: Tensor = field(
-        default_factory=lambda: torch.tensor(
-            list(physionet_64_montage().get_positions()["ch_pos"].values())
-        )
-    )
+    n_channels: int = 64
     # Maximum sampling rate used.
     max_sr: int = 180
     # Minimum sampling rate used.
@@ -313,18 +308,16 @@ class MontageNet(nn.Module):
             ]
         )
 
-    def forward(self, batch: dict[str, list[str] | Tensor]):
+    def forward(self, batch: dict[str, Tensor]):
         task_keys, eeg, labels = (
             batch["tasks"],
             batch["input_features"],
             batch["labels"],
         )
-        assert isinstance(labels, Tensor)
-        assert isinstance(task_keys, list)
         latents = self.encoder(eeg)
         logits = torch.stack(
             [
-                self.task_heads[task_key](latent)
+                self.task_heads[int(task_key.item())](latent)
                 for task_key, latent in zip(task_keys, latents)
             ],
         )

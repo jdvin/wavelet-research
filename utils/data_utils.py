@@ -2,17 +2,22 @@ from dataclasses import dataclass, field
 from enum import Enum
 import os
 from typing import Callable, Any
-from torch.utils.data import Dataset
+import json
+import requests
+
 import mne
-
-
 from loguru import logger
 import numpy as np
 import torch
 from torch import Tensor
 from tqdm import tqdm
+from pnpl.datasets import LibriBrainPhoneme, LibriBrainSpeech
 
-from utils.torch_datasets import MappedLabelDataset, EEGEyeNetDataset
+from utils.torch_datasets import (
+    LibriBrainSpeechDataset,
+    MappedLabelDataset,
+    EEGEyeNetDataset,
+)
 from utils.electrode_utils import physionet_64_montage
 
 
@@ -670,10 +675,64 @@ def get_eeg_mmi_dataset(
 ) -> dict[str, np.memmap]:
     ret = {}
     os.makedirs(output_path, exist_ok=True)
+    electrode_positions = torch.tensor(
+        list(physionet_64_montage().get_positions()["ch_pos"].values())
+    )
     for split_name, split in splits.items():
         split_eeg, split_labels = extract_eeg_mmi_split(
             source_base_path, split, output_path, reset_cache
         )
-        dataset = MappedLabelDataset(split_eeg, split_labels, labels_map, tasks_map)
+        dataset = MappedLabelDataset(
+            split_eeg, split_labels, labels_map, tasks_map, electrode_positions
+        )
         ret[split_name] = dataset
     return ret
+
+
+def get_libri_brain_speech_dataset(
+    output_path: str,
+    books: list[int],
+    chapters: list[list[int]],
+    tmin: float = 0.0,
+    tmax: float = 0.8,
+    preload_files: bool = True,
+    sensor_mask: list[int] | None = None,
+):
+    # Download sensor locations JSON
+    os.makedirs(output_path, exist_ok=True)
+    p = os.path.join(output_path, "sensor_xyz.json")
+    if not os.path.exists(p):
+        with open(p, "wb") as f:
+            f.write(
+                requests.get(
+                    "https://neural-processing-lab.github.io/2025-libribrain-competition/sensor_xyz.json"
+                ).content
+            )
+    with open(p, "r") as fp:
+        sensor_positions = np.array(json.load(fp))
+    keys = [
+        ("0", str(chapter), f"Sherlock{book}") for book in books for chapter in chapters
+    ]
+    return LibriBrainSpeechDataset(
+        LibriBrainSpeech(
+            os.path.join(output_path, "data"),
+            include_run_keys=keys,
+            tmin=tmin,
+            tmax=tmax,
+            preload_files=preload_files,
+        ),
+        sensor_positions=torch.tensor(sensor_positions),
+        sensors_speech_mask=sensor_mask,
+    )
+
+
+def libri_speech_brain_collate_fn(items: list[tuple[torch.Tensor, np.ndarray, int]]):
+    sensor_positions, sensors, labels = zip(*items)
+    sensor_positions = torch.stack(sensor_positions)
+    sensors = torch.stack(sensors)
+    labels = torch.tensor(labels)
+    return {
+        "sensor_positions": sensor_positions,
+        "input_features": sensors,
+        "labels": labels,
+    }

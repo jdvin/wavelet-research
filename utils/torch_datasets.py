@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from torch.utils.data import Dataset
+import torch
 
 
 class EEGEyeNetDataset(Dataset):
@@ -30,6 +31,7 @@ class MappedLabelDataset(Dataset):
         labels: np.memmap,
         labels_map: dict[str, int],
         tasks_map: dict[str, int],
+        electrode_positions: torch.Tensor,
     ):
         self.labels_map = labels_map
         self.tasks_map = tasks_map
@@ -42,5 +44,43 @@ class MappedLabelDataset(Dataset):
     def __getitem__(self, index: int) -> tuple[int, np.ndarray, int]:
         input = self.inputs[index]
         task, label = self.labels[index, :]
-        print(task, label)
         return self.tasks_map[task], input, self.labels_map[label]
+
+
+class LibriBrainSpeechDataset(Dataset):
+    """
+    Parameters:
+        dataset: LibriBrain dataset.
+        limit_samples (int, optional): If provided, limits the length of the dataset to this
+                          number of samples.
+        speech_silence_only (bool, optional): If True, only includes segments that are either
+                          purely speech or purely silence (with additional balancing).
+        apply_sensors_speech_mask (bool, optional): If True, applies a fixed sensor mask to the sensor
+                          data in each sample.
+    """
+
+    def __init__(
+        self,
+        dataset,
+        sensor_positions: torch.Tensor,
+        sensors_speech_mask=None,
+    ):
+        self.dataset = dataset
+        self.sensor_positions = sensor_positions
+        # These are the sensors we identified:
+        self.sensors_speech_mask = sensors_speech_mask
+
+    def __len__(self):
+        return len(self.dataset.samples)
+
+    def __getitem__(self, index):
+        if self.sensors_speech_mask is not None:
+            sensors = self.dataset[index][0][self.sensors_speech_mask]
+        else:
+            sensors = self.dataset[index][0][:]
+        label_from_the_middle_idx = self.dataset[index][1].shape[0] // 2
+        return [
+            self.sensor_positions,
+            sensors,
+            self.dataset[index][1][label_from_the_middle_idx],
+        ]
