@@ -401,13 +401,13 @@ def get_dataloaders(
         key: DataLoader(
             ds,  # type: ignore
             batch_size=val_microbatch_size,
-            shuffle=sampler is None,
-            sampler=sampler,
+            shuffle=val_samplers[key] is None,
+            sampler=val_samplers[key],
             collate_fn=val_collate_fn,
             num_workers=2,
             worker_init_fn=partial(worker_init_fn, rank=rank),
         )
-        for (key, ds), sampler in zip(dataset.items(), val_samplers.values())
+        for key, ds in dataset.items()
         if key.endswith("_val")
     }
     return train_dataloader, train_sampler, val_dataloaders, val_samplers
@@ -440,7 +440,7 @@ def run_eval(
         assert dl_key == sampler_key
         val_pbar = tqdm(
             total=len(val_dataloader),
-            desc="fRunning validation: {dl_key}.",
+            desc=f"Running validation: {dl_key}.",
             leave=False,
             disable=device not in {0, "cuda:0", "cuda"},
         )

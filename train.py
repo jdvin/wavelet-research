@@ -17,9 +17,11 @@ from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 from utils.data_utils import (
     EEGMMISplit,
-    get_eeg_mmi_collate_fn,
+    eeg_mmi_collate_fn,
     get_eeg_mmi_dataset,
+    get_libri_brain_speech_dataset,
     get_nth_mask,
+    libri_speech_brain_collate_fn,
 )
 from utils.electrode_utils import (
     Region,
@@ -78,7 +80,7 @@ def main(
     )
     grad_accum_steps = cfg.batch_size // (cfg.train_micro_batch_size * cfg.world_size)
     model_config = MontageNetConfig(
-        **load_yaml(model_config_path), tasks=[TaskConfig(key="eyes", n_classes=2)]
+        **load_yaml(model_config_path), tasks=[TaskConfig(key="speech", n_classes=2)]
     )
 
     setup(
@@ -117,66 +119,100 @@ def main(
     # The first rank goes ahead to create the dataset if it does not already exist, before the other ranks then load it.
     # This is probably quite a strange pattern, but it is the simplest way to implement this behaviour.
     # TODO: Distributed dataset creation.
-    splits = {
-        "train": EEGMMISplit(
-            name="train",
-            subjects=list(range(1, 100)),
-            sessions=[1, 2],
-        ),
-        "eyes_val": EEGMMISplit(
-            name="val",
-            subjects=list(range(100, 110)),
-            sessions=[1, 2],
-        ),
-    }
+    # splits = {
+    #     "train": EEGMMISplit(
+    #         name="train",
+    #         subjects=list(range(1, 100)),
+    #         sessions=[1, 2],
+    #     ),
+    #     "eyes_val": EEGMMISplit(
+    #         name="val",
+    #         subjects=list(range(100, 110)),
+    #         sessions=[1, 2],
+    #     ),
+    # }
     if is_main_process:
-        ds = get_eeg_mmi_dataset(
-            source_base_path=cfg.dataset_path,
-            output_path="data",
-            splits=splits,
-            labels_map={"base_e_open": 0, "base_e_clos": 1},
-            tasks_map={"m_eyes_open": 0, "m_eyes_clos": 0},
-            reset_cache=reset_data_cache,
-        )
+        # ds = get_eeg_mmi_dataset(
+        #     source_base_path=cfg.dataset_path,
+        #     output_path="data/eeg_mmi",
+        #     splits=splits,
+        #     labels_map={"base_e_open": 0, "base_e_clos": 1},
+        #     tasks_map={"m_eyes_open": 0, "m_eyes_clos": 0},
+        #     reset_cache=reset_data_cache,
+        # )
+        ds = {
+            "train": get_libri_brain_speech_dataset(
+                output_path="data/libri_brain_speech",
+                books=[1],
+                books_chapters=[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
+                sessions=[1],
+            ),
+            "speech_val": get_libri_brain_speech_dataset(
+                output_path="data/libri_brain_speech",
+                books=[1],
+                books_chapters=[[11]],
+                sessions=[2],
+            ),
+        }
+
         if world_size > 1:
             dist.barrier()
     else:
         dist.barrier()
-        ds = get_eeg_mmi_dataset(
-            source_base_path=cfg.dataset_path,
-            output_path="data",
-            splits=splits,
-            labels_map={"e_open": 0, "e_clos": 1},
-            tasks_map={"m_eyes_open": 0, "m_eyes_clos": 0},
-            reset_cache=reset_data_cache,
-        )
+        # ds = get_eeg_mmi_dataset(
+        #     source_base_path=cfg.dataset_path,
+        #     output_path="data/eeg_mmi",
+        #     splits=splits,
+        #     labels_map={"e_open": 0, "e_clos": 1},
+        #     tasks_map={"m_eyes_open": 0, "m_eyes_clos": 0},
+        #     reset_cache=reset_data_cache,
+        # )
+        ds = {
+            "train": get_libri_brain_speech_dataset(
+                output_path="data/libri_brain_speech",
+                # partition="train",
+                books=[1],
+                books_chapters=[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
+                sessions=[1],
+            ),
+            "speech_val": get_libri_brain_speech_dataset(
+                output_path="data/libri_brain_speech",
+                # partition="val",
+                books=[1],
+                books_chapters=[[11]],
+                sessions=[2],
+            ),
+        }
 
     logger.info("Creating data loaders.")
-    fronto_occipital_electrodes = (
-        torch.tensor(
-            get_region_mask(
-                model.module.data_config.channel_positions.numpy(),
-                [Region.FRONTAL, Region.OCCIPITAL],
-            )
-        )
-        .unsqueeze(0)
-        .unsqueeze(-1)
-    )
-    temporo_parietal_electrodes = (
-        torch.tensor(
-            get_region_mask(
-                model.module.data_config.channel_positions.numpy(),
-                [Region.PARIETAL, Region.TEMPORAL],
-            )
-        )
-        .unsqueeze(0)
-        .unsqueeze(-1)
-    )
+    # fronto_occipital_electrodes = (
+    #     torch.tensor(
+    #         get_region_mask(
+    #             model.module.data_config.channel_positions.numpy(),
+    #             [Region.FRONTAL, Region.OCCIPITAL],
+    #         )
+    #     )
+    #     .unsqueeze(0)
+    #     .unsqueeze(-1)
+    # )
+    # temporo_parietal_electrodes = (
+    #     torch.tensor(
+    #         get_region_mask(
+    #             model.module.data_config.channel_positions.numpy(),
+    #             [Region.PARIETAL, Region.TEMPORAL],
+    #         )
+    #     )
+    #     .unsqueeze(0)
+    #     .unsqueeze(-1)
+    # )
     # train_mask = get_nth_mask(model.module.data_config.max_channels, 2, 1)
     # val_mask = get_nth_mask(model.module.data_config.max_channels, 2, 2)
 
-    train_collate_fn = get_eeg_mmi_collate_fn(mask=temporo_parietal_electrodes)
-    val_collate_fn = get_eeg_mmi_collate_fn(mask=fronto_occipital_electrodes)
+    # train_collate_fn = get_eeg_mmi_collate_fn(mask=temporo_parietal_electrodes)
+    # val_collate_fn = get_eeg_mmi_collate_fn(mask=fronto_occipital_electrodes)
+    train_collate_fn = libri_speech_brain_collate_fn
+    val_collate_fn = libri_speech_brain_collate_fn
+
     # Create data loaders.
     (
         train_dataloader,

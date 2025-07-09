@@ -94,6 +94,7 @@ class LibriBrainSpeechDataset(Dataset):
         label_from_the_middle_idx = self.dataset[index][1].shape[0] // 2
         return [
             self.sensor_positions,
+            0,  # Task HACK.
             sensors,
             self.dataset[index][1][label_from_the_middle_idx],
         ]

@@ -4,5 +4,10 @@ n_heads: 8
 d_mlp: 1024
 dropout: 0.1
 scale_exponent: -0.25
-return_latents: mean_pool 
+return_latents: middle
 n_blocks: 4
+data_config:
+  n_channels: 64
+  max_sr: 180
+  min_sr: 180
+  f_min: 5

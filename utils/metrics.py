@@ -413,22 +413,28 @@ class MetricManager:
             for key in validation_dataset_keys
         }
 
-    def log(self):
+    def log(
+        self,
+        metrics_dict: dict[str, Metric] | dict[str, dict[str, Metric]] | None = None,
+    ):
+        # TODO: GRoss, fix!.
+
         if not self.step.value % self.log_interval == 0:
             return
-        for key, metric in self.__dict__.items():
-            # TODO: GRoss, fix!.
+        if metrics_dict is None:
+            metrics_dict = self.__dict__
+        for key, metric in metrics_dict.items():
             if isinstance(metric, dict):
-                for sub_key, sub_metric in metric.items():
-                    if sub_metric.log_every_step:
-                        sub_metric.log()
-
+                self.log(metric)
+            # Coz we are dicting this class, we need to be defensive incase random stuff gets included.
             if not isinstance(metric, Metric):
                 continue
             if metric.log_every_step:
                 metric.log()
-
-        if self.is_main_process:
+        # You should be ashamed.
+        if self.is_main_process and isinstance(
+            next(iter(metrics_dict.values())), Metric
+        ):
             wandb.log({}, commit=True)
 
     def start_step_timer(self):

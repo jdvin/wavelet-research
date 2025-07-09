@@ -296,21 +296,20 @@ def get_nth_mask(size: int, n: int, offset: int = 1) -> torch.Tensor:
 def eeg_mmi_collate_fn(
     samples: list[tuple[torch.Tensor, int, np.memmap, int]],
 ) -> dict[str, torch.Tensor]:
-    # TODO: This is slow AF and should definitely be done on the GPU.
-    sensor_positons, tasks, input_features, labels = [], [], [], []
+    channel_positons, tasks, channel_signals, labels = [], [], [], []
     for sample in samples:
-        sensor_positons.append(sample[0])
+        channel_positons.append(sample[0])
         tasks.append(sample[1])
-        input_features.append(sample[2])
+        channel_signals.append(sample[2])
         labels.append(sample[3])
-    sensor_positons_tensor = torch.tensor(sensor_positons)
+    sensor_positons_tensor = torch.tensor(channel_positons)
     tasks_tensor = torch.tensor(tasks)
-    input_features_tensor = torch.tensor(np.array(input_features))
+    channel_signals_tensor = torch.tensor(np.array(channel_signals))
     labels_tensor = torch.tensor(labels)
     return {
-        "sensor_positions": sensor_positons_tensor,
+        "channel_positions": sensor_positons_tensor,
         "tasks": tasks_tensor,
-        "input_features": input_features_tensor,
+        "channel_signals": channel_signals_tensor,
         "labels": labels_tensor,
     }
 
@@ -683,10 +682,12 @@ def get_eeg_mmi_dataset(
 
 def get_libri_brain_speech_dataset(
     output_path: str,
-    books: list[int],
-    chapters: list[list[int]],
     tmin: float = 0.0,
     tmax: float = 0.8,
+    partition: str | None = None,
+    books: list[int] | None = None,
+    books_chapters: list[list[int]] | None = None,
+    sessions: list[int] | None = None,
     preload_files: bool = True,
     sensor_mask: list[int] | None = None,
 ):
@@ -702,13 +703,27 @@ def get_libri_brain_speech_dataset(
             )
     with open(p, "r") as fp:
         sensor_positions = np.array(json.load(fp))
-    keys = [
-        ("0", str(chapter), f"Sherlock{book}") for book in books for chapter in chapters
-    ]
+    variant = {}
+    if partition is None:
+        assert books is not None
+        assert books_chapters is not None
+        assert sessions is not None
+        keys = []
+        for book, chapters, session in zip(books, books_chapters, sessions):
+            keys.extend(
+                [
+                    ("0", str(chapter), f"Sherlock{book}", str(session))
+                    for chapter in chapters
+                ]
+            )
+        variant = {"include_run_keys": keys}
+    else:
+        variant = {"partition": partition}
+
     return LibriBrainSpeechDataset(
         LibriBrainSpeech(
             os.path.join(output_path, "data"),
-            include_run_keys=keys,
+            **variant,
             tmin=tmin,
             tmax=tmax,
             preload_files=preload_files,
@@ -718,13 +733,17 @@ def get_libri_brain_speech_dataset(
     )
 
 
-def libri_speech_brain_collate_fn(items: list[tuple[torch.Tensor, np.ndarray, int]]):
-    sensor_positions, sensors, labels = zip(*items)
-    sensor_positions = torch.stack(sensor_positions)
-    sensors = torch.stack(sensors)
+def libri_speech_brain_collate_fn(
+    items: list[tuple[torch.Tensor, int, np.ndarray, int]]
+):
+    channel_positions, tasks, channel_signals, labels = zip(*items)
+    channel_positions = torch.stack(channel_positions)
+    tasks = torch.tensor(tasks)
+    channel_signals = torch.stack(channel_signals)
     labels = torch.tensor(labels)
     return {
-        "sensor_positions": sensor_positions,
-        "input_features": sensors,
+        "channel_positions": channel_positions,
+        "tasks": tasks,
+        "channel_signals": channel_signals,
         "labels": labels,
     }
