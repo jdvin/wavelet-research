@@ -106,10 +106,6 @@ class EEGDataConfig:
     # lowest frequency that the embedding can capture.
     f_min: int = 5
 
-    @property
-    def max_channels(self):
-        return self.channel_positions.shape[0]
-
 
 @dataclass
 class TaskConfig:
@@ -132,7 +128,6 @@ class EEGPerceiverResampler(nn.Module):
     ):
         super().__init__()
         self.d_model = d_model
-        self.register_buffer("channel_positions", data_config.channel_positions)
         self.n_latents = n_latents
         self.pool_latents = pool_latents
         self.query_latents = nn.Parameter(torch.randn(n_latents, d_model))
@@ -178,6 +173,7 @@ class EEGPerceiverResampler(nn.Module):
     def forward(
         self,
         source: Tensor,
+        channel_positions: Tensor,
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
@@ -185,8 +181,8 @@ class EEGPerceiverResampler(nn.Module):
         T_emb = T  # self.embed_l_out(T)
         # Regenerate positional embeddings.
         pos_emb = repeat(
-            self.embed_positions(self.channel_positions),
-            "C D -> B C D T_emb",
+            self.embed_positions(channel_positions),
+            "B C D -> B C D T_emb",
             B=B,
             T_emb=T_emb,
             D=self.d_model,

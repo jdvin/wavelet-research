@@ -31,20 +31,33 @@ class MappedLabelDataset(Dataset):
         labels: np.memmap,
         labels_map: dict[str, int],
         tasks_map: dict[str, int],
-        electrode_positions: torch.Tensor,
+        sensor_positions: torch.Tensor,
+        sensor_mask: None | list[int] = None,
     ):
         self.labels_map = labels_map
         self.tasks_map = tasks_map
         self.inputs = inputs
         self.labels = labels
+        self.sensor_mask = sensor_mask
+        if sensor_mask is not None:
+            self.sensor_positions = sensor_positions[sensor_mask]
+        else:
+            self.sensor_positions = sensor_positions
 
     def __len__(self):
         return len(self.labels)
 
-    def __getitem__(self, index: int) -> tuple[int, np.ndarray, int]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, int, np.ndarray, int]:
         input = self.inputs[index]
+        if self.sensor_mask is not None:
+            input = input[self.sensor_mask]
         task, label = self.labels[index, :]
-        return self.tasks_map[task], input, self.labels_map[label]
+        return (
+            self.sensor_positions,
+            self.tasks_map[task],
+            input,
+            self.labels_map[label],
+        )
 
 
 class LibriBrainSpeechDataset(Dataset):
@@ -63,7 +76,7 @@ class LibriBrainSpeechDataset(Dataset):
         self,
         dataset,
         sensor_positions: torch.Tensor,
-        sensors_speech_mask=None,
+        sensors_speech_mask: None | list[int] = None,
     ):
         self.dataset = dataset
         self.sensor_positions = sensor_positions
