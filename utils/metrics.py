@@ -195,6 +195,109 @@ get_average_positive_logits = partial(get_average_logits_for_label, label=1)
 get_average_negative_logits = partial(get_average_logits_for_label, label=-1)
 
 
+def get_confusion_matrix_components(out: Mapping[str, Tensor]) -> Tensor:
+    """Calculate TP, FP, TN, FN for binary classification.
+
+    Returns tensor with shape [4, num_classes] where:
+    - [0, :] = True Positives per class
+    - [1, :] = False Positives per class
+    - [2, :] = True Negatives per class
+    - [3, :] = False Negatives per class
+    """
+    logits, labels = out["logits"], out["labels"]
+    predictions = logits.argmax(dim=1)
+
+    # Get number of classes
+    num_classes = logits.shape[1]
+
+    # Initialize confusion matrix components
+    tp = torch.zeros(num_classes, device=logits.device)
+    fp = torch.zeros(num_classes, device=logits.device)
+    tn = torch.zeros(num_classes, device=logits.device)
+    fn = torch.zeros(num_classes, device=logits.device)
+
+    for class_idx in range(num_classes):
+        # True positives: predicted class and actual class
+        tp[class_idx] = ((predictions == class_idx) & (labels == class_idx)).sum()
+
+        # False positives: predicted class but not actual class
+        fp[class_idx] = ((predictions == class_idx) & (labels != class_idx)).sum()
+
+        # True negatives: not predicted class and not actual class
+        tn[class_idx] = ((predictions != class_idx) & (labels != class_idx)).sum()
+
+        # False negatives: not predicted class but actual class
+        fn[class_idx] = ((predictions != class_idx) & (labels == class_idx)).sum()
+
+    return torch.stack([tp, fp, tn, fn], dim=0)
+
+
+def get_per_class_precision(confusion_matrix: Tensor) -> Tensor:
+    """Calculate precision per class from confusion matrix components.
+
+    Args:
+        confusion_matrix: [4, num_classes] tensor with [TP, FP, TN, FN]
+
+    Returns:
+        precision per class, shape [num_classes]
+    """
+    tp = confusion_matrix[0]  # True positives
+    fp = confusion_matrix[1]  # False positives
+
+    # Precision = TP / (TP + FP), avoid division by zero
+    precision = tp / (tp + fp + 1e-8)
+    return precision
+
+
+def get_per_class_recall(confusion_matrix: Tensor) -> Tensor:
+    """Calculate recall per class from confusion matrix components.
+
+    Args:
+        confusion_matrix: [4, num_classes] tensor with [TP, FP, TN, FN]
+
+    Returns:
+        recall per class, shape [num_classes]
+    """
+    tp = confusion_matrix[0]  # True positives
+    fn = confusion_matrix[3]  # False negatives
+
+    # Recall = TP / (TP + FN), avoid division by zero
+    recall = tp / (tp + fn + 1e-8)
+    return recall
+
+
+def get_per_class_f1(confusion_matrix: Tensor) -> Tensor:
+    """Calculate F1-score per class from confusion matrix components.
+
+    Args:
+        confusion_matrix: [4, num_classes] tensor with [TP, FP, TN, FN]
+
+    Returns:
+        F1-score per class, shape [num_classes]
+    """
+    precision = get_per_class_precision(confusion_matrix)
+    recall = get_per_class_recall(confusion_matrix)
+
+    # F1 = 2 * (precision * recall) / (precision + recall), avoid division by zero
+    f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
+    return f1
+
+
+def extract_confusion_matrix_component(
+    confusion_matrix: Tensor, component_idx: int
+) -> Tensor:
+    """Extract a specific component from confusion matrix.
+
+    Args:
+        confusion_matrix: [4, num_classes] tensor with [TP, FP, TN, FN]
+        component_idx: 0=TP, 1=FP, 2=TN, 3=FN
+
+    Returns:
+        Component values per class, shape [num_classes]
+    """
+    return confusion_matrix[component_idx]
+
+
 def calculate_throughput(step_time_batch_size: tuple[float, int]) -> float:
     """Calculate samples per second from step time and batch size."""
     step_time, batch_size = step_time_batch_size
@@ -247,6 +350,7 @@ class Metric:
     device: str | int = "cpu"
     world_size: int = 1
     is_distributed: bool = False
+    has_reduced: bool = False
 
     def __post_init__(self):
         self.is_distributed = self.world_size > 1
@@ -257,11 +361,17 @@ class Metric:
     @property
     def value(self) -> Any:
         assert self.state is not None
-        if isinstance(self.state, Tensor) and self.is_distributed:
+        if (
+            isinstance(self.state, Tensor)
+            and self.is_distributed
+            and not self.has_reduced
+        ):
             self.state = self.reduce_fn(self.state, self.world_size)
+            self.has_reduced = True
         return self.compute_fn(self.state)
 
     def update(self, inference_artefacts: InferenceArtefacts) -> None:
+        self.has_reduced = False
         if self.state is None:
             self.state = self.transform_fn(inference_artefacts)
         else:
@@ -274,7 +384,7 @@ class Metric:
         value = self.value
         if self.device in (0, "cuda", "cuda:0", "cpu", "mps"):
             if isinstance(value, Tensor):
-                value = value.item()
+                value = value.tolist() if value.numel() > 1 else value.item()
             wandb.log(
                 {self.name: (plot.line(**value) if isinstance(value, dict) else value)},
                 commit=False,
@@ -409,6 +519,16 @@ class MetricManager:
                     device=device,
                     world_size=world_size,
                 ),
+                "confusion_matrix": Metric(
+                    f"val/{key}/confusion_matrix",
+                    tensor([0.0]),
+                    transform_fn=get_confusion_matrix_components,
+                    reduce_fn=all_reduce_sum,  # Sum confusion matrix components across ranks
+                    compute_fn=identity,
+                    log_every_step=False,
+                    device=device,
+                    world_size=world_size,
+                ),
             }
             for key in validation_dataset_keys
         }
@@ -448,6 +568,56 @@ class MetricManager:
             self.step_time.update(step_time)
             self.throughput.update((step_time, self.batch_size))
             self.step_start_time = None
+
+    def log_per_class_metrics(self, dataset_key: str):
+        """Log per-class metrics separately for each class."""
+
+        # Get confusion matrix to compute per-class metrics
+        confusion_matrix = self.val[dataset_key]["confusion_matrix"].value
+
+        if confusion_matrix is None or not self.is_main_process:
+            return
+
+        # Calculate per-class metrics
+        precision = get_per_class_precision(confusion_matrix)
+        recall = get_per_class_recall(confusion_matrix)
+        f1 = get_per_class_f1(confusion_matrix)
+        # Extract individual confusion matrix components
+        tp = confusion_matrix[0]  # True positives
+        fp = confusion_matrix[1]  # False positives
+        tn = confusion_matrix[2]  # True negatives
+        fn = confusion_matrix[3]  # False negatives
+
+        # Log metrics for each class
+        num_classes = precision.shape[0]
+        for class_idx in range(num_classes):
+            class_metrics = {
+                f"val/{dataset_key}/class_{class_idx}/precision": precision[
+                    class_idx
+                ].item(),
+                f"val/{dataset_key}/class_{class_idx}/recall": recall[class_idx].item(),
+                f"val/{dataset_key}/class_{class_idx}/f1": f1[class_idx].item(),
+                f"val/{dataset_key}/class_{class_idx}/true_positives": tp[
+                    class_idx
+                ].item(),
+                f"val/{dataset_key}/class_{class_idx}/false_positives": fp[
+                    class_idx
+                ].item(),
+                f"val/{dataset_key}/class_{class_idx}/true_negatives": tn[
+                    class_idx
+                ].item(),
+                f"val/{dataset_key}/class_{class_idx}/false_negatives": fn[
+                    class_idx
+                ].item(),
+            }
+            wandb.log(class_metrics, commit=False)
+        # Log overall averages (macro-averaged metrics)
+        overall_metrics = {
+            f"val/{dataset_key}/precision_macro": precision.mean().item(),
+            f"val/{dataset_key}/recall_macro": recall.mean().item(),
+            f"val/{dataset_key}/f1_macro": f1.mean().item(),
+        }
+        wandb.log(overall_metrics, commit=False)
 
     def step_iterators(
         self, batch_size: int, steps_per_epoch: int, num_microbatches: int, lr_scheduler

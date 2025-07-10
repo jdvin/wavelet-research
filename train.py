@@ -146,12 +146,14 @@ def main(
                 books=[1],
                 books_chapters=[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
                 sessions=[1],
+                oversample_silence_jitter=70,
             ),
             "speech_val": get_libri_brain_speech_dataset(
                 output_path="data/libri_brain_speech",
                 books=[1],
                 books_chapters=[[11]],
                 sessions=[2],
+                oversample_silence_jitter=70,
             ),
         }
 
@@ -174,6 +176,7 @@ def main(
                 books=[1],
                 books_chapters=[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
                 sessions=[1],
+                oversample_silence_jitter=70,
             ),
             "speech_val": get_libri_brain_speech_dataset(
                 output_path="data/libri_brain_speech",
@@ -181,6 +184,7 @@ def main(
                 books=[1],
                 books_chapters=[[11]],
                 sessions=[2],
+                oversample_silence_jitter=70,
             ),
         }
 

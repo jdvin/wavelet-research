@@ -456,10 +456,17 @@ def run_eval(
             val_pbar.update()
             out = {"logits": logits, "labels": labels}
             metrics.val[dl_key]["accuracy"].update(out)
+            # Update confusion matrix for per-class metrics
+            metrics.val[dl_key]["confusion_matrix"].update(out)
+
+        # Log standard metrics
         metrics.val[dl_key]["accuracy"].log()
+        # Log per-class metrics using the new method
+        metrics.log_per_class_metrics(dl_key)
 
         metrics.val[dl_key]["loss"].update(accum_loss)
         metrics.val[dl_key]["loss"].log()
+        metrics.val[dl_key]["confusion_matrix"].log()
         del accum_loss
     torch.cuda.empty_cache()
     model.train()

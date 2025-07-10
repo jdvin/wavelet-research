@@ -376,7 +376,10 @@ class MontageNet(nn.Module):
             ],
         )
         loss = torch.stack(
-            [F.cross_entropy(logit, label) for logit, label in zip(logits, labels)]
+            [
+                F.cross_entropy(logit, label, label_smoothing=0.1)
+                for logit, label in zip(logits, labels)
+            ]
         ).mean()
         return loss, logits, labels
 
