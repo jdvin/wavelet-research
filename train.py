@@ -288,11 +288,8 @@ def main(
             device=rank,
             dtype=torch_dtype,
         )
+    metrics.start_step_timer()
     while True:
-        # Start timing the step (including gradient accumulation)
-        if metrics.microstep.value % grad_accum_steps == 0:
-            metrics.start_step_timer()
-
         is_accumulating = (
             metrics.microstep.value % grad_accum_steps != 0
             and metrics.epoch_microstep.value != len(train_dataloader)
@@ -377,6 +374,7 @@ def main(
         metrics.step_iterators(
             cfg.batch_size, steps_per_epoch, len(train_dataloader), lr_scheduler
         )
+        metrics.start_step_timer()
     cleanup(world_size)
 
 

@@ -1,15 +1,16 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
+from functools import partial
 import torch
 from torch import einsum as einsum
 import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
-import mne
 from rotary_embedding_torch import RotaryEmbedding
 from einops import rearrange, repeat
 
+from src.components.focal_loss import FocalLoss
 from src.components.norm import RMSNorm
 from src.components.attention import MultiHeadAttention
 from src.components.activations import GEGLU
@@ -360,6 +361,12 @@ class MontageNet(nn.Module):
                 for task in config.tasks
             ]
         )
+        self.loss = FocalLoss(
+            # alpha=torch.tensor([0.666, 0.333]),
+            task_type="multi-class",
+            num_classes=2,
+        )
+        # self.loss = partial(F.cross_entropy, label_smoothing=0.1)
 
     def forward(self, batch: dict[str, Tensor]):
         channel_positions, task_keys, channel_signals, labels = (
@@ -377,7 +384,7 @@ class MontageNet(nn.Module):
         )
         loss = torch.stack(
             [
-                F.cross_entropy(logit, label, label_smoothing=0.1)
+                self.loss(logit.unsqueeze(0), label.unsqueeze(0))
                 for logit, label in zip(logits, labels)
             ]
         ).mean()
