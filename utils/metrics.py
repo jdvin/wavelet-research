@@ -529,6 +529,16 @@ class MetricManager:
                     device=device,
                     world_size=world_size,
                 ),
+                "random_confusion_matrix": Metric(
+                    f"val/{key}/confusion_matrix",
+                    tensor([0.0]),
+                    transform_fn=get_confusion_matrix_components,
+                    reduce_fn=all_reduce_sum,  # Sum confusion matrix components across ranks
+                    compute_fn=identity,
+                    log_every_step=False,
+                    device=device,
+                    world_size=world_size,
+                ),
             }
             for key in validation_dataset_keys
         }
@@ -569,11 +579,8 @@ class MetricManager:
             self.throughput.update((step_time, self.batch_size))
             self.step_start_time = None
 
-    def log_per_class_metrics(self, dataset_key: str):
+    def log_per_class_metrics(self, dataset_key: str, confusion_matrix: Tensor):
         """Log per-class metrics separately for each class."""
-
-        # Get confusion matrix to compute per-class metrics
-        confusion_matrix = self.val[dataset_key]["confusion_matrix"].value
 
         if confusion_matrix is None or not self.is_main_process:
             return

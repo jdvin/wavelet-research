@@ -455,14 +455,24 @@ def run_eval(
 
             val_pbar.update()
             out = {"logits": logits, "labels": labels}
+            random_out = {
+                "logits": torch.randn(logits.shape, device=device),
+                "labels": labels,
+            }
             metrics.val[dl_key]["accuracy"].update(out)
             # Update confusion matrix for per-class metrics
             metrics.val[dl_key]["confusion_matrix"].update(out)
+            metrics.val[dl_key]["random_confusion_matrix"].update(random_out)
 
         # Log standard metrics
         metrics.val[dl_key]["accuracy"].log()
         # Log per-class metrics using the new method
-        metrics.log_per_class_metrics(dl_key)
+        metrics.log_per_class_metrics(
+            dl_key, metrics.val[dl_key]["confusion_matrix"].value
+        )
+        metrics.log_per_class_metrics(
+            dl_key + "_random", metrics.val[dl_key]["random_confusion_matrix"].value
+        )
 
         metrics.val[dl_key]["loss"].update(accum_loss)
         metrics.val[dl_key]["loss"].log()
