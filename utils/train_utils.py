@@ -477,6 +477,7 @@ def run_eval(
         metrics.val[dl_key]["loss"].update(accum_loss)
         metrics.val[dl_key]["loss"].log()
         metrics.val[dl_key]["confusion_matrix"].log()
+        metrics.val[dl_key]["random_confusion_matrix"].log()
         del accum_loss
     torch.cuda.empty_cache()
     model.train()

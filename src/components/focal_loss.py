@@ -91,7 +91,7 @@ class FocalLoss(nn.Module):
             return loss.sum()
         return loss
 
-    def multi_class_focal_loss(self, inputs, targets):
+    def multi_class_focal_loss(self, inputs: torch.Tensor, targets: torch.Tensor):
         """Focal loss for multi-class classification."""
         if self.alpha is not None:
             alpha = self.alpha.to(inputs.device)
@@ -99,14 +99,18 @@ class FocalLoss(nn.Module):
         # Convert logits to probabilities with softmax
         probs = F.softmax(inputs, dim=1)
 
-        # One-hot encode the targets
-        targets_one_hot = F.one_hot(targets, num_classes=self.num_classes).float()
+        if len(targets.shape) == 1:
+            # One-hot encode the targets
+            target_logits = F.one_hot(targets, num_classes=self.num_classes).float()
+        else:
+            target_logits = targets
+            targets = targets.argmax(dim=1)
 
         # Compute cross-entropy for each class
-        ce_loss = -targets_one_hot * torch.log(probs)
+        ce_loss = -target_logits * torch.log(probs)
 
         # Compute focal weight
-        p_t = torch.sum(probs * targets_one_hot, dim=1)  # p_t for each sample
+        p_t = torch.sum(probs * target_logits, dim=1)  # p_t for each sample
         focal_weight = (1 - p_t) ** self.gamma
 
         # Apply alpha if provided (per-class weighting)

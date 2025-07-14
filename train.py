@@ -172,16 +172,16 @@ def main(
         ds = {
             "train": get_libri_brain_speech_dataset(
                 output_path="data/libri_brain_speech",
-                # partition="train",
-                books=[1],
+                partition="train",
+                # books=[1, 2],
                 books_chapters=[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
                 sessions=[1],
                 oversample_silence_jitter=70,
             ),
             "speech_val": get_libri_brain_speech_dataset(
                 output_path="data/libri_brain_speech",
-                # partition="val",
-                books=[1],
+                partition="val",
+                # books=[1],
                 books_chapters=[[11]],
                 sessions=[2],
                 oversample_silence_jitter=70,

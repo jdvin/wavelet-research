@@ -365,6 +365,7 @@ class MontageNet(nn.Module):
             # alpha=torch.tensor([0.666, 0.333]),
             task_type="multi-class",
             num_classes=2,
+            reduction="",
         )
         # self.loss = partial(F.cross_entropy, label_smoothing=0.1)
 
@@ -376,18 +377,15 @@ class MontageNet(nn.Module):
             batch["labels"],
         )
         latents = self.encoder(channel_signals, channel_positions)
-        logits = torch.stack(
-            [
-                self.task_heads[int(task_key.item())](latent)
-                for task_key, latent in zip(task_keys, latents)
-            ],
-        )
-        loss = torch.stack(
-            [
-                self.loss(logit.unsqueeze(0), label.unsqueeze(0))
-                for logit, label in zip(logits, labels)
-            ]
-        ).mean()
+        losses, logits = [], []
+        for task_key, latent, label in zip(task_keys, latents, labels):
+            logit = self.task_heads[int(task_key.item())](latent)
+            logits.append(logit)
+            targets = F.one_hot(label, num_classes=logit.shape[-1]).unsqueeze(0)
+            targets = targets * 0.9 if label == 1 else targets
+            losses.append(self.loss(logit.unsqueeze(0), targets))
+        loss = torch.stack(losses).mean()
+        logits = torch.stack(logits)
         return loss, logits, labels
 
     @property
