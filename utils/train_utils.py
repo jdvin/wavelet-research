@@ -8,7 +8,9 @@ import random
 from datetime import timedelta
 import atexit
 import signal
+from enum import Enum
 
+from muon import MuonWithAuxAdam
 from loguru import logger
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler, DistributedSampler
@@ -28,6 +30,11 @@ from utils.metrics import MetricManager
 
 
 from contextlib import suppress
+
+
+class Optimizer(Enum):
+    ADAMW = "adamw"
+    MUON = "muon"
 
 
 def list_grad_mismatches(model, atol=1e-6):
@@ -310,42 +317,97 @@ def get_validation_step_indexes(
     return validation_step_indexes
 
 
+def get_adam_param_groups(
+    named_parameters, weight_decay: float = 1e-1
+) -> list[dict[str, str]]:
+    # start with all of the candidate parameters
+    param_dict = {pn: p for pn, p in named_parameters}
+    # filter out those that do not require grad
+    param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+    # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+    # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+    decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+    nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+    optim_groups = [
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": nodecay_params, "weight_decay": 0.0},
+    ]
+    return optim_groups
+
+
+def get_muon_param_groups(
+    named_parameters: dict[str, torch.Tensor],
+    lrs: dict[str, float],
+    weight_decay: float = 1e-1,
+) -> list[dict]:
+    muon_params = [
+        p for n, p in named_parameters.items() if p.ndim >= 2 and "encoder.blocks" in n
+    ]
+    non_muon_params = [
+        p
+        for n, p in named_parameters.items()
+        if p.ndim < 2 and "encoder.blocks" not in n
+    ]
+    biases = [p for n, p in named_parameters.items() if p.ndim == 1]
+    return [
+        {
+            "params": muon_params,
+            "weight_decay": weight_decay,
+            "lr": lrs["muon"],
+            "use_muon": True,
+        },
+        {
+            "params": non_muon_params,
+            "weight_decay": weight_decay,
+            "lr": lrs["adamw"],
+            "use_muon": False,
+        },
+        {
+            "params": biases,
+            "weight_decay": 0.0,
+            "lr": lrs["adamw"],
+            "use_muon": False,
+        },
+    ]
+
+
 def configure_optimizers(
-    parameters,
-    num_batches: int,
+    named_parameters,
+    total_steps: int,
     max_lr: float,
     weight_decay: float,
     warmup_frac: float,
-    use_shampoo: bool = False,
+    use_optimizer: Optimizer = Optimizer.MUON,
 ):
-    if use_shampoo:
-        optimizer = DistributedShampoo(
-            parameters,
+    named_parameters = {n: p for n, p in named_parameters()}
+
+    if use_optimizer == Optimizer.MUON:
+        param_groups = get_muon_param_groups(
+            named_parameters, {"muon": 0.02, "adamw": max_lr}, weight_decay
+        )
+        optimizer = MuonWithAuxAdam(param_groups)
+    elif use_optimizer == Optimizer.ADAMW:
+        param_groups = get_adam_param_groups(named_parameters, weight_decay)
+        optimizer = AdamW(
+            param_groups,
             lr=max_lr,
-            betas=(0.9, 0.999),
-            epsilon=1e-12,
-            weight_decay=weight_decay,
-            max_preconditioner_dim=8192,
-            precondition_frequency=100,
-            use_decoupled_weight_decay=True,
-            grafting_config=AdamGraftingConfig(
-                beta2=0.999,
-                epsilon=1e-08,
-            ),
         )
     else:
-        optimizer = AdamW(
-            parameters,
-            lr=max_lr,
-            weight_decay=weight_decay,
-        )
-    warmup_batches = int(num_batches * warmup_frac)
-    warmup_scheduler = LinearLR(
-        optimizer, start_factor=1e-7, end_factor=1, total_iters=warmup_batches
-    )
-    decay_scheduler = CosineAnnealingLR(optimizer, T_max=num_batches)
-    scheduler = SequentialLR(
-        optimizer, [warmup_scheduler, decay_scheduler], milestones=[warmup_batches]
+        raise NotImplementedError(f"Unknown optimizer: {use_optimizer}")
+
+    warmup_steps = int(total_steps * warmup_frac)
+
+    # one λ for every param-group → same shape, same multiplicative factor
+    def lr_scale(step):
+        if step < warmup_steps:
+            return step / warmup_steps  # linear warm-up → 1
+        t = (step - warmup_steps) / (total_steps - warmup_steps)
+        return 0.5 * (1 + math.cos(math.pi * t))  # cosine decay
+
+    # Scale separately per param-group.
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=[lr_scale] * len(optimizer.param_groups),
     )
     return optimizer, scheduler
 

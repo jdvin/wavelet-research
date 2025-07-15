@@ -381,9 +381,7 @@ class MontageNet(nn.Module):
         for task_key, latent, label in zip(task_keys, latents, labels):
             logit = self.task_heads[int(task_key.item())](latent)
             logits.append(logit)
-            targets = F.one_hot(label, num_classes=logit.shape[-1]).unsqueeze(0)
-            targets = targets * 0.9 if label == 1 else targets
-            losses.append(self.loss(logit.unsqueeze(0), targets))
+            losses.append(self.loss(logit.unsqueeze(0), label.unsqueeze(0)))
         loss = torch.stack(losses).mean()
         logits = torch.stack(logits)
         return loss, logits, labels
@@ -406,12 +404,4 @@ class MontageNet(nn.Module):
             {"params": decay_params, "weight_decay": weight_decay},
             {"params": nodecay_params, "weight_decay": 0.0},
         ]
-        num_decay_params = sum(p.numel() for p in decay_params)
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(
-            f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
-        )
-        print(
-            f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
-        )
         return optim_groups
