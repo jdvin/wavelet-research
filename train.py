@@ -251,8 +251,8 @@ def main(
     logger.info("Creating optimizer.")
 
     optim, lr_scheduler = configure_optimizers(
-        model.module.optim_groups(cfg.weight_decay),
-        num_batches=steps_per_epoch * cfg.num_epochs,
+        model.module.named_parameters,
+        total_steps=steps_per_epoch * cfg.num_epochs,
         max_lr=cfg.max_lr,
         weight_decay=cfg.weight_decay,
         warmup_frac=cfg.warmup_frac,

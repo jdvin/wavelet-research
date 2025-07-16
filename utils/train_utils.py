@@ -320,14 +320,10 @@ def get_validation_step_indexes(
 def get_adam_param_groups(
     named_parameters, weight_decay: float = 1e-1
 ) -> list[dict[str, str]]:
-    # start with all of the candidate parameters
-    param_dict = {pn: p for pn, p in named_parameters}
-    # filter out those that do not require grad
-    param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
     # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
     # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-    decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-    nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+    decay_params = [p for n, p in named_parameters.items() if p.dim() >= 2]
+    nodecay_params = [p for n, p in named_parameters.items() if p.dim() < 2]
     optim_groups = [
         {"params": decay_params, "weight_decay": weight_decay},
         {"params": nodecay_params, "weight_decay": 0.0},
@@ -346,9 +342,9 @@ def get_muon_param_groups(
     non_muon_params = [
         p
         for n, p in named_parameters.items()
-        if p.ndim < 2 and "encoder.blocks" not in n
+        if p.ndim >= 2 and "encoder.blocks" not in n
     ]
-    biases = [p for n, p in named_parameters.items() if p.ndim == 1]
+    biases = [p for n, p in named_parameters.items() if p.ndim < 2]
     return [
         {
             "params": muon_params,
@@ -377,13 +373,13 @@ def configure_optimizers(
     max_lr: float,
     weight_decay: float,
     warmup_frac: float,
-    use_optimizer: Optimizer = Optimizer.MUON,
+    use_optimizer: Optimizer = Optimizer.ADAMW,
 ):
-    named_parameters = {n: p for n, p in named_parameters()}
+    named_parameters = {n: p for n, p in named_parameters() if p.requires_grad}
 
     if use_optimizer == Optimizer.MUON:
         param_groups = get_muon_param_groups(
-            named_parameters, {"muon": 0.02, "adamw": max_lr}, weight_decay
+            named_parameters, {"muon": max_lr * 66, "adamw": max_lr}, weight_decay
         )
         optimizer = MuonWithAuxAdam(param_groups)
     elif use_optimizer == Optimizer.ADAMW:

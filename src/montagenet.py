@@ -214,6 +214,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             padding="same",
         )
         self.embed_positions = nn.Linear(3, d_model)
+        self.embed_channels = nn.Embedding(306, d_model)
         self.embed_l_out = lambda T: int((T - emb_kernel_size) / emb_stride + 1)
         rotary_embedding = RotaryEmbedding(dim=32, cache_max_seq_len=256)
         self.blocks = nn.ModuleList(
@@ -240,15 +241,21 @@ class SpatioTemporalPerceiverResampler(nn.Module):
     ) -> Tensor:
         B, C, T = source.shape
         T_emb = T  # self.embed_l_out(T)
-        # Regenerate positional embeddings.
-        pos_emb = repeat(
-            self.embed_positions(channel_positions),
-            "B C D -> B C D T_emb",
+        # pos_emb = repeat(
+        #     self.embed_positions(channel_positions),
+        #     "B C D -> B C D T_emb",
+        #     B=B,
+        #     T_emb=T_emb,
+        #     D=self.d_model,
+        # )
+        chan_embed = repeat(
+            self.embed_channels.weight,
+            "C D -> B C D T_emb",
             B=B,
+            C=C,
             T_emb=T_emb,
             D=self.d_model,
         )
-        # Embed EEG data.
         source = rearrange(
             self.embed(rearrange(source, "B C T -> (B C) 1 T")),
             "(B C) D T_emb -> B C D T_emb",
@@ -256,7 +263,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             C=C,
             D=self.d_model,
         )
-        source = rearrange(source + pos_emb, "B C D T_emb -> (B T_emb) C D")
+        source = rearrange(source + chan_embed, "B C D T_emb -> (B T_emb) C D")
         # source = rearrange(source, "B C D T_emb -> (B T_emb) C D")
         # Initialize query latents
         latents = repeat(
@@ -390,18 +397,3 @@ class MontageNet(nn.Module):
     def module(self):
         """For interoperability with DDP"""
         return self
-
-    def optim_groups(self, weight_decay: float = 1e-1) -> list[dict[str, str]]:
-        # start with all of the candidate parameters
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        # filter out those that do not require grad
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-        optim_groups = [
-            {"params": decay_params, "weight_decay": weight_decay},
-            {"params": nodecay_params, "weight_decay": 0.0},
-        ]
-        return optim_groups
