@@ -1,5 +1,6 @@
 import argparse
 from contextlib import nullcontext
+from functools import partial
 import os
 import math
 import signal
@@ -131,6 +132,19 @@ def main(
     #         sessions=[1, 2],
     #     ),
     # }
+    train_ds_getter = partial(
+        get_libri_brain_speech_dataset,
+        output_path="data/libri_brain_speech",
+        partition="train",
+        stride=100,
+        oversample_silence_jitter=35,
+    )
+    val_ds_getter = partial(
+        get_libri_brain_speech_dataset,
+        output_path="data/libri_brain_speech",
+        partition="validation",
+        oversample_silence_jitter=70,
+    )
     if is_main_process:
         # ds = get_eeg_mmi_dataset(
         #     source_base_path=cfg.dataset_path,
@@ -141,22 +155,8 @@ def main(
         #     reset_cache=reset_data_cache,
         # )
         ds = {
-            "train": get_libri_brain_speech_dataset(
-                output_path="data/libri_brain_speech",
-                partition="train",
-                # books=[1],
-                # books_chapters=[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
-                # sessions=[1],
-                oversample_silence_jitter=70,
-            ),
-            "speech_val": get_libri_brain_speech_dataset(
-                output_path="data/libri_brain_speech",
-                partition="validation",
-                # books=[1],
-                # books_chapters=[[11]],
-                # sessions=[2],
-                oversample_silence_jitter=70,
-            ),
+            "train": train_ds_getter(),
+            "speech_val": val_ds_getter(),
         }
 
         if world_size > 1:
@@ -172,22 +172,8 @@ def main(
         #     reset_cache=reset_data_cache,
         # )
         ds = {
-            "train": get_libri_brain_speech_dataset(
-                output_path="data/libri_brain_speech",
-                partition="train",
-                # books=[1, 2],
-                # books_chapters=[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
-                # sessions=[1],
-                oversample_silence_jitter=70,
-            ),
-            "speech_val": get_libri_brain_speech_dataset(
-                output_path="data/libri_brain_speech",
-                partition="validation",
-                # books=[1],
-                # books_chapters=[[11]],
-                # sessions=[2],
-                oversample_silence_jitter=70,
-            ),
+            "train": train_ds_getter(),
+            "speech_val": val_ds_getter(),
         }
 
     logger.info("Creating data loaders.")
