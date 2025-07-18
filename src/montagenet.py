@@ -241,13 +241,13 @@ class SpatioTemporalPerceiverResampler(nn.Module):
     ) -> Tensor:
         B, C, T = source.shape
         T_emb = T  # self.embed_l_out(T)
-        pos_emb = repeat(
-            self.embed_positions(channel_positions),
-            "B C D -> B C D T_emb",
-            B=B,
-            T_emb=T_emb,
-            D=self.d_model,
-        )
+        # pos_emb = repeat(
+        #     self.embed_positions(channel_positions),
+        #     "B C D -> B C D T_emb",
+        #     B=B,
+        #     T_emb=T_emb,
+        #     D=self.d_model,
+        # )
         chan_embed = repeat(
             self.embed_channels.weight,
             "C D -> B C D T_emb",
@@ -263,9 +263,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             C=C,
             D=self.d_model,
         )
-        source = rearrange(
-            source + chan_embed + pos_emb, "B C D T_emb -> (B T_emb) C D"
-        )
+        source = rearrange(source + chan_embed, "B C D T_emb -> (B T_emb) C D")
         # source = rearrange(source, "B C D T_emb -> (B T_emb) C D")
         # Initialize query latents
         latents = repeat(
