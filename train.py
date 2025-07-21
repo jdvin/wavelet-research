@@ -136,8 +136,8 @@ def main(
         get_libri_brain_speech_dataset,
         output_path="data/libri_brain_speech",
         partition="train",
-        # stride=100,
-        oversample_silence_jitter=70,  # 35,
+        stride=100,
+        oversample_silence_jitter=35,
     )
     val_ds_getter = partial(
         get_libri_brain_speech_dataset,
