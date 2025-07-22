@@ -240,6 +240,7 @@ def main(
         model.module.named_parameters,
         total_steps=steps_per_epoch * cfg.num_epochs,
         max_lr=cfg.max_lr,
+        min_lr=cfg.min_lr,
         weight_decay=cfg.weight_decay,
         warmup_frac=cfg.warmup_frac,
     )
@@ -337,11 +338,11 @@ def main(
                 dtype=torch_dtype,
             )
         metrics.log()
-        if metrics.epoch_microstep.value == len(train_dataloader):
+        if metrics.epoch_microstep.value == len(train_dataloader) or test_run:
             if is_main_process and checkpoints:
                 torch.save(
-                    model.module,
-                    f"checkpoints/{run_name}/{cfg.run_project}_{cfg.run_group}_{cfg.run_name}_ep{metrics['epoch'].value}.pt",
+                    model.module.state_dict(),
+                    f"checkpoints/{run_name}/{cfg.run_project}_{cfg.run_group}_{cfg.run_name}_ep{metrics.epoch.value}.pt",
                 )
             metrics.epoch.update(1)
             train_pbar = tqdm(

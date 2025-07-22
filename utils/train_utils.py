@@ -151,6 +151,7 @@ class TrainingConfig:
     weight_decay: float
     warmup_frac: float
     grad_clip: float
+    min_lr: float = 0
 
     def __post_init__(self):
         assert self.batch_size % self.train_micro_batch_size == 0
@@ -371,6 +372,7 @@ def configure_optimizers(
     named_parameters,
     total_steps: int,
     max_lr: float,
+    min_lr: float,
     weight_decay: float,
     warmup_frac: float,
     use_optimizer: Optimizer = Optimizer.ADAMW,
@@ -398,7 +400,10 @@ def configure_optimizers(
         if step < warmup_steps:
             return step / warmup_steps  # linear warm-up → 1
         t = (step - warmup_steps) / (total_steps - warmup_steps)
-        return 0.5 * (1 + math.cos(math.pi * t))  # cosine decay
+        # cosine decay from max_lr to min_lr (similar to eta_min in PyTorch)
+        min_lr_ratio = min_lr / max_lr
+        cosine_factor = 0.5 * (1 + math.cos(math.pi * t))
+        return min_lr_ratio + (1 - min_lr_ratio) * cosine_factor
 
     # Scale separately per param-group.
     scheduler = torch.optim.lr_scheduler.LambdaLR(
