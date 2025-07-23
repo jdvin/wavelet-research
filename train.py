@@ -110,7 +110,7 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
-    # model = torch.compile(model, mode="reduce-overhead")  # type: ignore
+    model = torch.compile(model)  # type: ignore
     assert len({param.device for param in model.parameters()}) == 1
     log_model_details(model)
     # reporter = MemReporter(model)
@@ -136,8 +136,8 @@ def main(
         get_libri_brain_speech_dataset,
         output_path="data/libri_brain_speech",
         partition="train",
-        stride=100,
-        oversample_silence_jitter=35,
+        # stride=100,
+        oversample_silence_jitter=70,  # 35,
     )
     val_ds_getter = partial(
         get_libri_brain_speech_dataset,
@@ -240,9 +240,8 @@ def main(
         model.module.named_parameters,
         total_steps=steps_per_epoch * cfg.num_epochs,
         max_lr=cfg.max_lr,
-        min_lr=cfg.min_lr,
+        lr_schedules=cfg.lr_schedules,
         weight_decay=cfg.weight_decay,
-        warmup_frac=cfg.warmup_frac,
     )
     metrics = MetricManager(
         device=rank,

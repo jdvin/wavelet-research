@@ -22,7 +22,12 @@ import yaml
 
 from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR,
+    LinearLR,
+    SequentialLR,
+    ConstantLR,
+)
 
 
 from src.montagenet import MontageNet, MontageNetConfig
@@ -148,10 +153,9 @@ class TrainingConfig:
     validation_interval: float
     log_interval: float  # Measured in steps.
     max_lr: float
+    lr_schedules: list[dict[str, Any]]
     weight_decay: float
-    warmup_frac: float
     grad_clip: float
-    min_lr: float = 0
 
     def __post_init__(self):
         assert self.batch_size % self.train_micro_batch_size == 0
@@ -368,13 +372,18 @@ def get_muon_param_groups(
     ]
 
 
+class LRSchedule(Enum):
+    LINEAR = "linear"
+    COSINE = "cosine"
+    CONSTANT = "constant"
+
+
 def configure_optimizers(
     named_parameters,
     total_steps: int,
     max_lr: float,
-    min_lr: float,
+    lr_schedules: list[dict[str, Any]],
     weight_decay: float,
-    warmup_frac: float,
     use_optimizer: Optimizer = Optimizer.ADAMW,
 ):
     named_parameters = {n: p for n, p in named_parameters() if p.requires_grad}
@@ -393,23 +402,47 @@ def configure_optimizers(
     else:
         raise NotImplementedError(f"Unknown optimizer: {use_optimizer}")
 
-    warmup_steps = int(total_steps * warmup_frac)
+    schedulers = []
+    milestones = []
+    for i, lr_schedule in enumerate(lr_schedules):
+        current_milestone = total_steps * lr_schedule["start"]
+        next_milestone = (
+            total_steps * lr_schedules[i + 1]["start"]
+            if i < len(lr_schedules) - 1
+            else total_steps
+        )
+        milestone_iters = next_milestone - current_milestone
+        if i != 0:
+            milestones.append(current_milestone)
+        schedule_type = LRSchedule(lr_schedule["type"])
+        if schedule_type == LRSchedule.LINEAR:
+            schedulers.append(
+                LinearLR(
+                    optimizer,
+                    **lr_schedule["kargs"],
+                    total_iters=milestone_iters,
+                )
+            )
+        elif schedule_type == LRSchedule.COSINE:
+            schedulers.append(
+                CosineAnnealingLR(
+                    optimizer,
+                    **lr_schedule["kargs"],
+                    T_max=milestone_iters,
+                )
+            )
+        elif schedule_type == LRSchedule.CONSTANT:
+            schedulers.append(
+                ConstantLR(
+                    optimizer,
+                    **lr_schedule["kargs"],
+                    total_iters=milestone_iters,
+                )
+            )
+        else:
+            raise NotImplementedError(f"Unknown lr schedule: {lr_schedule['type']}")
+    scheduler = SequentialLR(optimizer, schedulers, milestones=milestones)
 
-    # one λ for every param-group → same shape, same multiplicative factor
-    def lr_scale(step):
-        if step < warmup_steps:
-            return step / warmup_steps  # linear warm-up → 1
-        t = (step - warmup_steps) / (total_steps - warmup_steps)
-        # cosine decay from max_lr to min_lr (similar to eta_min in PyTorch)
-        min_lr_ratio = min_lr / max_lr
-        cosine_factor = 0.5 * (1 + math.cos(math.pi * t))
-        return min_lr_ratio + (1 - min_lr_ratio) * cosine_factor
-
-    # Scale separately per param-group.
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=[lr_scale] * len(optimizer.param_groups),
-    )
     return optimizer, scheduler
 
 

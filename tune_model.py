@@ -6,6 +6,7 @@ import json
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score
 from rotary_embedding_torch.rotary_embedding_torch import default
 from torch.utils.data import DataLoader
 from pnpl.datasets import LibriBrainSpeech, LibriBrainCompetitionHoldout
@@ -101,10 +102,10 @@ def main(
     )
     tune_logits, tune_labels = generate_logits(model, tune_dataloader)
     regressor = LogisticRegression(random_state=42).fit(tune_logits, tune_labels)
-    logger.info(f"Tuning accuracy: {regressor.score(tune_logits, tune_labels)}")
+    predicted_probs = regressor.predict_proba(tune_logits)
+    logger.info(f"Tuning accuracy: {f1_score(tune_labels, tune_logits )}")
     test_logits, test_labels = generate_logits(model, test_dataloader)
     test_probs = regressor.predict_proba(test_logits)
-
     test_dataset.generate_submission_in_csv(...)
 
 
