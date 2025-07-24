@@ -110,7 +110,7 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
-    model = torch.compile(model)  # type: ignore
+    # model = torch.compile(model)  # type: ignore
     assert len({param.device for param in model.parameters()}) == 1
     log_model_details(model)
     # reporter = MemReporter(model)
@@ -136,8 +136,8 @@ def main(
         get_libri_brain_speech_dataset,
         output_path="data/libri_brain_speech",
         partition="train",
-        # stride=100,
-        oversample_silence_jitter=70,  # 35,
+        stride=100,
+        oversample_silence_jitter=35,
     )
     val_ds_getter = partial(
         get_libri_brain_speech_dataset,

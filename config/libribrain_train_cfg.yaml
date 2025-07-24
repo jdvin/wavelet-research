@@ -1,6 +1,6 @@
 dtype: bf16
 dataset_path: /teamspace/this_studio/wavelet-research/data/libri_brain_speech
-num_epochs: 1
+num_epochs: 2
 batch_size: 32
 train_micro_batch_size: 8
 val_micro_batch_size: 16
@@ -20,6 +20,6 @@ lr_schedules:
   - start: 0.25
     type: constant
     kargs:
-      factor: 1.0
+      factor: 0.5
 weight_decay: 0.01
 grad_clip: 1.0
