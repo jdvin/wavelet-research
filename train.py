@@ -1,10 +1,8 @@
 import argparse
+import os
 from contextlib import nullcontext
 from functools import partial
-import os
 import math
-import signal
-import sys
 
 from loguru import logger
 import torch
@@ -339,9 +337,12 @@ def main(
         metrics.log()
         if metrics.epoch_microstep.value == len(train_dataloader) or test_run:
             if is_main_process and checkpoints:
+                os.makedirs(
+                    f"/teamspace/s3_connections/models/{run_name}", exist_ok=True
+                )
                 torch.save(
                     model.module.state_dict(),
-                    f"checkpoints/{run_name}/{cfg.run_project}_{cfg.run_group}_{cfg.run_name}_ep{metrics.epoch.value}.pt",
+                    f"/teamspace/s3_connections/models/{run_name}/{cfg.run_project}_{cfg.run_group}_{cfg.run_name}_ep{metrics.epoch.value}.pt",
                 )
             metrics.epoch.update(1)
             train_pbar = tqdm(

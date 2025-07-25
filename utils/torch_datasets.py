@@ -91,7 +91,13 @@ class LibriBrainSpeechDataset(Dataset):
             sensors = self.dataset[index][0][self.sensors_speech_mask]
         else:
             sensors = self.dataset[index][0][:]
+
         label_from_the_middle_idx = self.dataset[index][1].shape[0] // 2
+        # try:
+        #     label_from_the_middle_idx = self.dataset[index][1].shape[0] // 2
+        # except AttributeError:
+        #     print(self.dataset[index])
+        #     breakpoint()
         return [
             self.sensor_positions,
             0,  # Task HACK.

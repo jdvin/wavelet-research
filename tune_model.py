@@ -57,20 +57,26 @@ def get_datasets(output_path: str, tune_split: str, t_max: float, task: str):
     return tune_dataset, test_dataset
 
 
+@torch.no_grad()
 def generate_logits(model, dataloader, device):
     all_logits = []
     all_labels = []
     iterator = iter(dataloader)
+    pbar = tqdm(total=len(dataloader))
     while True:
         try:
             batch = get_microbatch(iterator, device, torch.bfloat16)
+            pbar.update()
         except StopIteration:
             break
         # For your submission, this is where you would generate your model prediction:
-        loss, logits, labels = model(batch)  # Assuming model has a predict method
-        all_logits.append(logits)
-        all_labels.append(labels)
-    return torch.stack(all_logits).cpu().numpy(), torch.stack(all_labels).cpu().numpy()
+        # loss, logits, labels = model(batch)
+        labels = batch["labels"]
+        logits = torch.randn((labels.shape[0], 2))
+
+        all_logits.append(logits.detach().cpu())
+        all_labels.append(labels.detach().cpu())
+    return torch.concat(all_logits).numpy(), torch.concat(all_labels).numpy()
 
 
 def main(
@@ -102,7 +108,7 @@ def main(
             "No model checkpoint path provided. Running random initialization."
         )
     model.eval()
-    logger.info("Loading Datasetss")
+    logger.info("Loading Datasets")
     tune_dataset, test_dataset = get_datasets(
         dataset_path, tune_split=tune_split, t_max=t_max, task="speech"
     )
@@ -126,20 +132,9 @@ def main(
     regressor = LogisticRegression(random_state=42).fit(tune_logits, tune_labels)
     logger.info("Predicting probabilities for tune set.")
     predicted_probs = regressor.predict_proba(tune_logits)
-    logger.info("Optimising decision boundary.")
-    best_f1, best_thresh = 0.0, 0.0
-    for thresh in np.arange(0.0, 1.0, 0.1):
-        predicted_labels = (predicted_probs > thresh).astype(int)
-        score = f1_score(tune_labels, predicted_labels, labels=[0, 1], average="macro")
-        logger.info(f"Tuning macro f1 @ thresh {thresh}: {score}")
-        if score > best_f1:
-            best_f1 = score
-            best_thresh = thresh
-            logger.info(f"New best macro f1 @ thresh {thresh}!")
-    logger.info("=" * 80)
-    logger.info(f"Best thresh: {best_thresh}")
-    logger.info(f"Predicted F1 @ best thresh: {best_f1}")
-
+    predicted_labels = predicted_probs.argmax(axis=1)
+    score = f1_score(tune_labels, predicted_labels, labels=[0, 1], average="macro")
+    logger.info(f"Predicted F1: {score}")
     test_logits, test_labels = generate_logits(model, test_dataloader, device)
     test_probs = regressor.predict_proba(test_logits)
     test_dataset.dataset.generate_submission_in_csv(test_probs, output_path)
@@ -153,7 +148,7 @@ if __name__ == "__main__":
     parser.add_argument("--tune-split", type=str, required=True)
     parser.add_argument("--output-path", type=str, required=True)
     parser.add_argument("--t-max", type=float, default=0.8)
-    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--dtype", type=str, default="bf16")

@@ -1,6 +1,7 @@
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from collections import defaultdict
+from functools import partial
 import math
 from typing import Any, Callable, Iterator
 import os
@@ -19,7 +20,7 @@ from tqdm import tqdm
 import numpy as np
 import wandb
 import yaml
-
+from typing import Callable, List, Optional
 from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import (
@@ -27,6 +28,7 @@ from torch.optim.lr_scheduler import (
     LinearLR,
     SequentialLR,
     ConstantLR,
+    _LRScheduler,
 )
 
 
@@ -218,6 +220,7 @@ def setup(
                 os.makedirs("checkpoints")
             assert not os.path.isdir(f"checkpoints/{run_name}")
             os.makedirs(f"checkpoints/{run_name}")
+        wandb.login(key=os.environ["WANDB_API_KEY"])
         wandb.init(
             project=run_project,
             group=run_group,
@@ -372,6 +375,106 @@ def get_muon_param_groups(
     ]
 
 
+class CarryOverScheduler(_LRScheduler):
+    """
+    Chain several LR schedulers *seamlessly* (no jump between stages).
+
+    Parameters
+    ----------
+    optimizer : torch.optim.Optimizer
+        The wrapped optimiser.
+    factories : List[Callable[[torch.optim.Optimizer], _LRScheduler]]
+        A list of callables (often `lambda opt: ...`) that, given the
+        *current* optimiser, return a fresh LR scheduler for the next stage.
+    milestones : List[int]
+        Cumulative number of steps **after which** to switch to the next
+        stage.  Must be strictly increasing and `len(milestones) == len(factories)-1`.
+    last_epoch : int, optional
+        Usual PyTorch convention.  Leave at ``-1`` when you start training
+        from scratch; supply the global step when you resume.
+    """
+
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        factories: List[Callable[[torch.optim.Optimizer], _LRScheduler]],
+        milestones: List[int],
+        last_epoch: int = -1,
+    ):
+        if len(factories) < 1:
+            raise ValueError("Need at least one factory.")
+        if len(milestones) != len(factories) - 1:
+            raise ValueError("len(milestones) must be len(factories)-1.")
+
+        self.optimizer = optimizer
+        self.factories = factories
+        self.milestones = list(milestones)
+        self.stage_idx = 0  # which factory we’re on
+        self.stage_start = 0  # global step at which stage began
+        self.current = factories[0](optimizer)  # first scheduler
+        super().__init__(optimizer, last_epoch)
+
+    # --------------------------------------------------------------------- #
+    #  Required overrides
+    # --------------------------------------------------------------------- #
+    def get_last_lr(self):
+        # Delegate to the inner scheduler
+        return self.current.get_last_lr()
+
+    def step(self, epoch: Optional[int] = None) -> None:  # noqa: D401
+        """
+        Advance one training **step** (not epoch).  Mirrors `_LRScheduler.step`.
+
+        If `epoch` is given it is interpreted as **global** step count.
+        """
+        # Determine the *next* global epoch value (PyTorch's `_LRScheduler`
+        # counts from 0), then see if that trips a milestone.
+        if epoch is None:
+            next_epoch = self.last_epoch + 1
+        else:
+            next_epoch = epoch
+
+        # Switch stage if we just *finished* a milestone step
+        if (
+            self.stage_idx < len(self.milestones)
+            and next_epoch >= self.milestones[self.stage_idx]
+        ):
+            self.stage_idx += 1
+            self.stage_start = self.milestones[self.stage_idx - 1]
+            self.current = self.factories[self.stage_idx](self.optimizer)
+
+        # Advance the inner scheduler with its *own* local epoch
+        local_epoch = next_epoch - self.stage_start
+        self.current.step(local_epoch)
+
+        # Keep PyTorch bookkeeping happy
+        self.last_epoch = next_epoch
+
+    # --------------------------------------------------------------------- #
+    #  Check-/state-handling so you can resume training
+    # --------------------------------------------------------------------- #
+    def state_dict(self):
+        base = super().state_dict()
+        base.update(
+            {
+                "stage_idx": self.stage_idx,
+                "stage_start": self.stage_start,
+                "current": self.current.state_dict(),
+            }
+        )
+        return base
+
+    def load_state_dict(self, state_dict):
+        self.stage_idx = state_dict.pop("stage_idx")
+        self.stage_start = state_dict.pop("stage_start")
+        current_state = state_dict.pop("current")
+        super().load_state_dict(state_dict)
+
+        # Re-build sub-schedulers so param groups line up
+        self.current = self.factories[self.stage_idx](self.optimizer)
+        self.current.load_state_dict(current_state)
+
+
 class LRSchedule(Enum):
     LINEAR = "linear"
     COSINE = "cosine"
@@ -417,23 +520,24 @@ def configure_optimizers(
         schedule_type = LRSchedule(lr_schedule["type"])
         if schedule_type == LRSchedule.LINEAR:
             schedulers.append(
-                LinearLR(
-                    optimizer,
+                partial(
+                    LinearLR,
                     **lr_schedule["kargs"],
                     total_iters=milestone_iters,
                 )
             )
         elif schedule_type == LRSchedule.COSINE:
             schedulers.append(
-                CosineAnnealingLR(
-                    optimizer,
+                partial(
+                    CosineAnnealingLR,
                     **lr_schedule["kargs"],
                     T_max=milestone_iters,
                 )
             )
         elif schedule_type == LRSchedule.CONSTANT:
             schedulers.append(
-                ConstantLR(
+                partial(
+                    ConstantLR,
                     optimizer,
                     **lr_schedule["kargs"],
                     total_iters=milestone_iters,
@@ -441,7 +545,11 @@ def configure_optimizers(
             )
         else:
             raise NotImplementedError(f"Unknown lr schedule: {lr_schedule['type']}")
-    scheduler = SequentialLR(optimizer, schedulers, milestones=milestones)
+    scheduler = CarryOverScheduler(
+        optimizer,
+        schedulers,
+        milestones=milestones,
+    )
 
     return optimizer, scheduler
 
