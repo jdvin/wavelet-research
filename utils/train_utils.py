@@ -216,11 +216,8 @@ def setup(
     else:
         # Initialize checkpoints directory and wandb logging for the first rank.
         if checkpoints:
-            if not os.path.isdir("checkpoints"):
-                os.makedirs("checkpoints")
-            assert not os.path.isdir(f"checkpoints/{run_name}")
-            os.makedirs(f"checkpoints/{run_name}")
-        wandb.login(key=os.environ["WANDB_API_KEY"])
+            assert not os.path.isdir(f"models/{run_name}")
+        wandb.login(key="0c41fd541cf8349bb840a39dd5a90363b1f5e952")
         wandb.init(
             project=run_project,
             group=run_group,
@@ -377,21 +374,9 @@ def get_muon_param_groups(
 
 class CarryOverScheduler(_LRScheduler):
     """
-    Chain several LR schedulers *seamlessly* (no jump between stages).
-
-    Parameters
-    ----------
-    optimizer : torch.optim.Optimizer
-        The wrapped optimiser.
-    factories : List[Callable[[torch.optim.Optimizer], _LRScheduler]]
-        A list of callables (often `lambda opt: ...`) that, given the
-        *current* optimiser, return a fresh LR scheduler for the next stage.
-    milestones : List[int]
-        Cumulative number of steps **after which** to switch to the next
-        stage.  Must be strictly increasing and `len(milestones) == len(factories)-1`.
-    last_epoch : int, optional
-        Usual PyTorch convention.  Leave at ``-1`` when you start training
-        from scratch; supply the global step when you resume.
+    Chain LR schedulers so every new stage *inherits* the optimiser's CURRENT
+    learning rate(s) – no jumps, even with ConstantLR or other schedulers
+    that look at group['initial_lr'].
     """
 
     def __init__(
@@ -409,57 +394,65 @@ class CarryOverScheduler(_LRScheduler):
         self.optimizer = optimizer
         self.factories = factories
         self.milestones = list(milestones)
-        self.stage_idx = 0  # which factory we’re on
-        self.stage_start = 0  # global step at which stage began
-        self.current = factories[0](optimizer)  # first scheduler
+        self.stage_idx = 0
+        self.stage_start = 0
+        self.current = self._make_scheduler(0)  # stage-0
         super().__init__(optimizer, last_epoch)
 
-    # --------------------------------------------------------------------- #
-    #  Required overrides
-    # --------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # helper ------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    def _make_scheduler(self, idx: int) -> _LRScheduler:
+        """Build scheduler `idx`, patch its base_lrs to CURRENT LRs."""
+        # 1) snapshot current LRs
+        cur_lrs = [g["lr"] for g in self.optimizer.param_groups]
+
+        # 2) build the scheduler (this will internally call step(0) once)
+        sched = self.factories[idx](self.optimizer)
+
+        # 3) restore the *current* LR and make the new scheduler see it
+        for g, lr in zip(self.optimizer.param_groups, cur_lrs):
+            g["lr"] = lr
+            g["initial_lr"] = lr  # so future schedulers inherit
+        sched.base_lrs = cur_lrs
+
+        return sched
+
+    # ------------------------------------------------------------------ #
+    # required API ------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
     def get_last_lr(self):
-        # Delegate to the inner scheduler
         return self.current.get_last_lr()
 
-    def step(self, epoch: Optional[int] = None) -> None:  # noqa: D401
-        """
-        Advance one training **step** (not epoch).  Mirrors `_LRScheduler.step`.
+    def step(self, epoch: Optional[int] = None) -> None:
+        """Advance one optimiser **step**."""
+        next_global = self.last_epoch + 1 if epoch is None else epoch
+        local_step = next_global - self.stage_start
 
-        If `epoch` is given it is interpreted as **global** step count.
-        """
-        # Determine the *next* global epoch value (PyTorch's `_LRScheduler`
-        # counts from 0), then see if that trips a milestone.
-        if epoch is None:
-            next_epoch = self.last_epoch + 1
-        else:
-            next_epoch = epoch
+        # 1. run the active scheduler for *this* step
+        self.current.step(local_step)
 
-        # Switch stage if we just *finished* a milestone step
+        # 2. if we just finished a milestone, prepare the next scheduler
         if (
             self.stage_idx < len(self.milestones)
-            and next_epoch >= self.milestones[self.stage_idx]
+            and next_global >= self.milestones[self.stage_idx]
         ):
             self.stage_idx += 1
             self.stage_start = self.milestones[self.stage_idx - 1]
-            self.current = self.factories[self.stage_idx](self.optimizer)
+            self.current = self._make_scheduler(self.stage_idx)
 
-        # Advance the inner scheduler with its *own* local epoch
-        local_epoch = next_epoch - self.stage_start
-        self.current.step(local_epoch)
+        self.last_epoch = next_global
 
-        # Keep PyTorch bookkeeping happy
-        self.last_epoch = next_epoch
-
-    # --------------------------------------------------------------------- #
-    #  Check-/state-handling so you can resume training
-    # --------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # state-dict helpers ------------------------------------------------ #
+    # ------------------------------------------------------------------ #
     def state_dict(self):
         base = super().state_dict()
         base.update(
             {
                 "stage_idx": self.stage_idx,
                 "stage_start": self.stage_start,
-                "current": self.current.state_dict(),
+                "current_state": self.current.state_dict(),
             }
         )
         return base
@@ -467,11 +460,9 @@ class CarryOverScheduler(_LRScheduler):
     def load_state_dict(self, state_dict):
         self.stage_idx = state_dict.pop("stage_idx")
         self.stage_start = state_dict.pop("stage_start")
-        current_state = state_dict.pop("current")
+        current_state = state_dict.pop("current_state")
         super().load_state_dict(state_dict)
-
-        # Re-build sub-schedulers so param groups line up
-        self.current = self.factories[self.stage_idx](self.optimizer)
+        self.current = self._make_scheduler(self.stage_idx)
         self.current.load_state_dict(current_state)
 
 
@@ -538,7 +529,6 @@ def configure_optimizers(
             schedulers.append(
                 partial(
                     ConstantLR,
-                    optimizer,
                     **lr_schedule["kargs"],
                     total_iters=milestone_iters,
                 )

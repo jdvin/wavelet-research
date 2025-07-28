@@ -22,15 +22,7 @@ from utils.train_utils import get_microbatch, load_yaml
 
 
 def get_datasets(output_path: str, tune_split: str, t_max: float, task: str):
-    os.makedirs(output_path, exist_ok=True)
     p = os.path.join(output_path, "sensor_xyz.json")
-    if not os.path.exists(p):
-        with open(p, "wb") as f:
-            f.write(
-                requests.get(
-                    "https://neural-processing-lab.github.io/2025-libribrain-competition/sensor_xyz.json"
-                ).content
-            )
     with open(p, "r") as fp:
         sensor_positions = np.array(json.load(fp))
 
@@ -52,6 +44,7 @@ def get_datasets(output_path: str, tune_split: str, t_max: float, task: str):
             task=task,
         ),
         sensor_positions=torch.tensor(sensor_positions),
+        holdout=True,
     )
 
     return tune_dataset, test_dataset
@@ -76,7 +69,10 @@ def generate_logits(model, dataloader, device):
 
         all_logits.append(logits.detach().cpu())
         all_labels.append(labels.detach().cpu())
-    return torch.concat(all_logits).numpy(), torch.concat(all_labels).numpy()
+    return (
+        torch.concat(all_logits).to(dtype=torch.float32).numpy(),
+        torch.concat(all_labels).to(dtype=torch.long).numpy(),
+    )
 
 
 def main(
@@ -134,9 +130,11 @@ def main(
     predicted_probs = regressor.predict_proba(tune_logits)
     predicted_labels = predicted_probs.argmax(axis=1)
     score = f1_score(tune_labels, predicted_labels, labels=[0, 1], average="macro")
+    del tune_labels, predicted_probs, predicted_labels
     logger.info(f"Predicted F1: {score}")
     test_logits, test_labels = generate_logits(model, test_dataloader, device)
     test_probs = regressor.predict_proba(test_logits)
+    del test_logits, test_labels
     test_dataset.dataset.generate_submission_in_csv(test_probs, output_path)
 
 

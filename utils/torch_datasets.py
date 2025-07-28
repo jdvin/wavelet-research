@@ -77,11 +77,13 @@ class LibriBrainSpeechDataset(Dataset):
         dataset,
         sensor_positions: torch.Tensor,
         sensors_speech_mask: None | list[int] = None,
+        holdout: bool = False,
     ):
         self.dataset = dataset
         self.sensor_positions = sensor_positions
         # These are the sensors we identified:
         self.sensors_speech_mask = sensors_speech_mask
+        self.holdout = holdout
 
     def __len__(self):
         return len(self.dataset.samples)
@@ -92,15 +94,20 @@ class LibriBrainSpeechDataset(Dataset):
         else:
             sensors = self.dataset[index][0][:]
 
-        label_from_the_middle_idx = self.dataset[index][1].shape[0] // 2
-        # try:
-        #     label_from_the_middle_idx = self.dataset[index][1].shape[0] // 2
-        # except AttributeError:
-        #     print(self.dataset[index])
-        #     breakpoint()
+        if not self.holdout:
+            label_from_the_middle_idx = self.dataset[index][1].shape[0] // 2
+
+            speech_density = (
+                self.dataset[index][1].sum() / self.dataset[index][1].shape[0]
+            )
+            speech_proximity = self.dataset[index][1]
+            label = self.dataset[index][1][label_from_the_middle_idx]
+        else:
+            label = torch.tensor(1.0)
+
         return [
             self.sensor_positions,
             0,  # Task HACK.
             sensors,
-            self.dataset[index][1][label_from_the_middle_idx],
+            label,
         ]
