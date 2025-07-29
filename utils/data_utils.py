@@ -741,14 +741,16 @@ def get_libri_brain_speech_dataset(
 def libri_speech_brain_collate_fn(
     items: list[tuple[torch.Tensor, int, np.ndarray, int]]
 ):
-    channel_positions, tasks, channel_signals, labels = zip(*items)
+    channel_positions, tasks, channel_signals, labels, metadata = zip(*items)
     channel_positions = torch.stack(channel_positions)
     tasks = torch.tensor(tasks)
     channel_signals = torch.stack(channel_signals)
     labels = torch.tensor(labels)
+    metadata = torch.stack(metadata)
     return {
         "channel_positions": channel_positions,
         "tasks": tasks,
         "channel_signals": channel_signals,
         "labels": labels,
+        "metadata": metadata,
     }

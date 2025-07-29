@@ -3,6 +3,7 @@ import os
 from contextlib import nullcontext
 from functools import partial
 import math
+import tempfile
 
 from loguru import logger
 import torch
@@ -42,6 +43,7 @@ from utils.train_utils import (
     get_validation_step_indexes,
     get_dataloader_iterator,
     TrainingConfig,
+    upload_to_s3,
 )
 
 from utils.metrics import (
@@ -337,13 +339,20 @@ def main(
         metrics.log()
         if metrics.epoch_microstep.value == len(train_dataloader) or test_run:
             if is_main_process and checkpoints:
-                os.makedirs(
-                    f"/teamspace/s3_connections/models/{run_name}", exist_ok=True
-                )
-                torch.save(
-                    model.module.state_dict(),
-                    f"/teamspace/s3_connections/models/{run_name}/{cfg.run_project}_{cfg.run_group}_{cfg.run_name}_ep{metrics.epoch.value}.pt",
-                )
+                # Create temporary file for checkpoint
+                with tempfile.NamedTemporaryFile(
+                    delete=False, suffix=".pt"
+                ) as tmp_file:
+                    tmp_file_path = tmp_file.name
+
+                # Save model state to temporary file
+                torch.save(model.module.state_dict(), tmp_file_path)
+
+                # Upload to S3
+                s3_bucket = "neural-decode-models"
+                s3_key = f"{run_name}/{cfg.run_project}_{cfg.run_group}_{cfg.run_name}_ep{metrics.epoch.value}.pt"
+                upload_to_s3(tmp_file_path, s3_bucket, s3_key)
+
             metrics.epoch.update(1)
             train_pbar = tqdm(
                 total=steps_per_epoch,

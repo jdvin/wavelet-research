@@ -19,7 +19,6 @@ dependencies = [
     "pytorch-memlab>=0.3.0",
     "rotary-embedding-torch>=0.8.6",
     "scikit-learn>=1.7.1",
-    "stl>=0.0.3",
     "torch>=2.7.0",
     "wandb>=0.19.11",
 ]

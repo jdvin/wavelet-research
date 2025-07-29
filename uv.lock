@@ -1691,12 +1691,6 @@ wheels = [
 ]
 
 [[package]]
-name = "stl"
-version = "0.0.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/aa/91/4bdb12160348109179158d34e6eda6279166302ec0224d6edc8324f344df/stl-0.0.3.tar.gz", hash = "sha256:03a6b58ad52ecf16823b1cf1acf6ef382aa5c0fc1152379f464e284a4f81304b", size = 4230 }
-
-[[package]]
 name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1885,7 +1879,6 @@ dependencies = [
     { name = "pytorch-memlab" },
     { name = "rotary-embedding-torch" },
     { name = "scikit-learn" },
-    { name = "stl" },
     { name = "torch" },
     { name = "wandb" },
 ]
@@ -1906,7 +1899,6 @@ requires-dist = [
     { name = "pytorch-memlab", specifier = ">=0.3.0" },
     { name = "rotary-embedding-torch", specifier = ">=0.8.6" },
     { name = "scikit-learn", specifier = ">=1.7.1" },
-    { name = "stl", specifier = ">=0.0.3" },
     { name = "torch", specifier = ">=2.7.0" },
     { name = "wandb", specifier = ">=0.19.11" },
 ]

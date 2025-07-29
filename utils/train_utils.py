@@ -11,7 +11,9 @@ import atexit
 import signal
 from enum import Enum
 
-from muon import MuonWithAuxAdam
+import boto3
+
+# from muon import MuonWithAuxAdam
 from loguru import logger
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler, DistributedSampler
@@ -21,10 +23,12 @@ import numpy as np
 import wandb
 import yaml
 from typing import Callable, List, Optional
-from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
+
+# from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
+    ExponentialLR,
     LinearLR,
     SequentialLR,
     ConstantLR,
@@ -193,6 +197,34 @@ def get_microbatch(
     }
 
 
+def upload_to_s3(local_file_path: str, s3_bucket: str, s3_key: str) -> None:
+    """
+    Upload a file to S3.
+
+    Args:
+        local_file_path: Path to the local file to upload
+        s3_bucket: S3 bucket name
+        s3_key: S3 object key (path within the bucket)
+    """
+    try:
+        # Create S3 client
+        s3_client = boto3.client("s3")
+
+        # Upload file to S3
+        logger.info(f"Starting upload to s3://{s3_bucket}/{s3_key}")
+        s3_client.upload_file(local_file_path, s3_bucket, s3_key)
+        logger.info(f"Successfully uploaded checkpoint to s3://{s3_bucket}/{s3_key}")
+
+        # Clean up local file after successful upload
+        if os.path.exists(local_file_path):
+            os.remove(local_file_path)
+            logger.info(f"Cleaned up local file: {local_file_path}")
+
+    except Exception as e:
+        logger.error(f"Failed to upload to S3: {e}")
+        # Don't raise the exception to avoid interrupting training
+
+
 def setup(
     rank: int,
     world_size: int,
@@ -215,9 +247,7 @@ def setup(
         logger.remove()
     else:
         # Initialize checkpoints directory and wandb logging for the first rank.
-        if checkpoints:
-            assert not os.path.isdir(f"models/{run_name}")
-        wandb.login(key="0c41fd541cf8349bb840a39dd5a90363b1f5e952")
+        wandb.login(key=os.environ.get("WANDB_API_KEY"))
         wandb.init(
             project=run_project,
             group=run_group,
@@ -470,6 +500,7 @@ class LRSchedule(Enum):
     LINEAR = "linear"
     COSINE = "cosine"
     CONSTANT = "constant"
+    EXPONENTIAL = "exponential"
 
 
 def configure_optimizers(
@@ -486,7 +517,7 @@ def configure_optimizers(
         param_groups = get_muon_param_groups(
             named_parameters, {"muon": max_lr * 66, "adamw": max_lr}, weight_decay
         )
-        optimizer = MuonWithAuxAdam(param_groups)
+        # optimizer = MuonWithAuxAdam(param_groups)
     elif use_optimizer == Optimizer.ADAMW:
         param_groups = get_adam_param_groups(named_parameters, weight_decay)
         optimizer = AdamW(
@@ -531,6 +562,13 @@ def configure_optimizers(
                     ConstantLR,
                     **lr_schedule["kargs"],
                     total_iters=milestone_iters,
+                )
+            )
+        elif schedule_type == LRSchedule.EXPONENTIAL:
+            schedulers.append(
+                partial(
+                    ExponentialLR,
+                    **lr_schedule["kargs"],
                 )
             )
         else:
