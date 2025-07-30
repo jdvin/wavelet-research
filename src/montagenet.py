@@ -311,6 +311,7 @@ class MontageNetConfig:
     n_blocks: int
     tasks: list[TaskConfig]
     data_config: DataConfig
+    epsilon_max: float
 
     def __init__(
         self,
@@ -324,6 +325,7 @@ class MontageNetConfig:
         n_blocks,
         tasks,
         data_config: dict[str, Any],
+        epsilon_max: float,
     ):
         self.n_latents = n_latents
         self.d_model = d_model
@@ -335,6 +337,7 @@ class MontageNetConfig:
         self.tasks = tasks
         self.data_config = DataConfig(**data_config)
         self.return_latents = ReturnLatents(return_latents)
+        self.epsilon_max = epsilon_max
 
 
 class MontageNet(nn.Module):
@@ -374,21 +377,36 @@ class MontageNet(nn.Module):
             num_classes=2,
             reduction="",
         )
+        self.epsilon_max = config.epsilon_max
         # self.loss = partial(F.cross_entropy, label_smoothing=0.1)
 
+    def compute_difficulty(self, speech_densities: Tensor, labels: Tensor):
+        return self.epsilon_max * (
+            (1 - labels) * speech_densities + labels * (1 - speech_densities)
+        )
+
     def forward(self, batch: dict[str, Tensor]):
-        channel_positions, task_keys, channel_signals, labels = (
+        channel_positions, task_keys, channel_signals, labels, metadata = (
             batch["channel_positions"],
             batch["tasks"],
             batch["channel_signals"],
             batch["labels"],
+            batch["metadata"],
         )
+        speech_densities = metadata[:, 0]
+        difficulties = self.compute_difficulty(speech_densities, labels)
         latents = self.encoder(channel_signals, channel_positions)
         losses, logits = [], []
-        for task_key, latent, label in zip(task_keys, latents, labels):
+        for task_key, latent, label, difficulty in zip(
+            task_keys, latents, labels, difficulties
+        ):
             logit = self.task_heads[int(task_key.item())](latent)
             logits.append(logit)
-            losses.append(self.loss(logit.unsqueeze(0), label.unsqueeze(0)))
+            losses.append(
+                self.loss.multi_class_focal_loss(
+                    logit.unsqueeze(0), label.unsqueeze(0), difficulty
+                )
+            )
         loss = torch.stack(losses).mean()
         logits = torch.stack(logits)
         return loss, logits, labels

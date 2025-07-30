@@ -6,11 +6,11 @@ import torch.nn.functional as F
 class FocalLoss(nn.Module):
     def __init__(
         self,
+        num_classes: int,
         gamma=2,
         alpha=None,
         reduction="mean",
         task_type="binary",
-        num_classes=None,
     ):
         """
         Unified Focal Loss class for binary, multi-class, and multi-label classification tasks.
@@ -91,7 +91,12 @@ class FocalLoss(nn.Module):
             return loss.sum()
         return loss
 
-    def multi_class_focal_loss(self, inputs: torch.Tensor, targets: torch.Tensor):
+    def multi_class_focal_loss(
+        self,
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+        ls_epsilon: torch.Tensor | None = None,
+    ):
         """Focal loss for multi-class classification."""
         if self.alpha is not None:
             alpha = self.alpha.to(inputs.device)
@@ -101,16 +106,21 @@ class FocalLoss(nn.Module):
 
         if len(targets.shape) == 1:
             # One-hot encode the targets
-            target_logits = F.one_hot(targets, num_classes=self.num_classes).float()
+            target_probs = F.one_hot(targets, num_classes=self.num_classes).float()
         else:
-            target_logits = targets
+            target_probs = targets
             targets = targets.argmax(dim=1)
 
+        if ls_epsilon is not None:
+            target_probs = (
+                1 - ls_epsilon
+            ) * target_probs + ls_epsilon / self.num_classes
+
         # Compute cross-entropy for each class
-        ce_loss = -target_logits * torch.log(probs)
+        ce_loss = -target_probs * torch.log(probs)
 
         # Compute focal weight
-        p_t = torch.sum(probs * target_logits, dim=1)  # p_t for each sample
+        p_t = torch.sum(probs * target_probs, dim=1)  # p_t for each sample
         focal_weight = (1 - p_t) ** self.gamma
 
         # Apply alpha if provided (per-class weighting)

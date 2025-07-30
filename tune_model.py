@@ -116,10 +116,6 @@ def fit_incremental_regressor(model, dataloader, device) -> SGDClassifier:
             # Update with subsequent batches
             regressor.partial_fit(batch_logits, batch_labels)
 
-        # Clean up batch data immediately
-        del batch_logits, batch_labels
-        gc.collect()
-
     return regressor
 
 
@@ -142,6 +138,7 @@ def predict_streaming(regressor, model, dataloader, device, output_file: str):
         ):
             batch_probs = regressor.predict_proba(batch_logits)
             predictions.append(batch_probs)
+            break
 
         all_predictions = np.vstack(predictions)
 
@@ -222,28 +219,27 @@ def main(
         num_workers=num_workers,
         collate_fn=libri_speech_brain_collate_fn,
     )
-    # # Fit regressor incrementally using streaming data
+    # Fit regressor incrementally using streaming data
     logger.info("Fitting regressor incrementally using streaming data...")
     regressor = fit_incremental_regressor(model, tune_dataloader, device)
 
-    # # Evaluate performance on tune set using streaming
+    # # # Evaluate performance on tune set using streaming
     logger.info("Evaluating performance on tune set...")
     score = evaluate_streaming(regressor, model, tune_dataloader, device)
     logger.info(f"Tune F1 Score: {score}")
 
-    # # Clean up tune dataset and dataloader
+    # Clean up tune dataset and dataloader
     del tune_dataset, tune_dataloader
     gc.collect()
 
     # Generate predictions for test set using streaming
     logger.info("Generating test predictions using streaming...")
-    regressor = None
     test_probs = predict_streaming(
         regressor, model, test_dataloader, device, output_path
     )
 
     # Generate submission CSV
-    test_dataset.dataset.generate_submission_in_csv(test_probs, output_path)
+    test_dataset.dataset.generate_submission_in_csv(test_probs[:, 1], output_path)
 
 
 if __name__ == "__main__":

@@ -96,17 +96,17 @@ class LibriBrainSpeechDataset(Dataset):
     def __len__(self):
         return len(self.dataset.samples)
 
-    def pad_to_length(self, tensor: torch.Tensor, index: int, pad_axis: int):
+    def pad_to_length(self, tensor: torch.Tensor, index: int):
         """Incredibly complicated function for the incredibly rare event that, whilst
         iterating over the competition holdout set, we get an example on either edge.
         """
-        if tensor.shape[pad_axis] == self.samples_per_item:
+        if tensor.shape[-1] == self.samples_per_item:
             return tensor
         # Left, right padding for each axis.
-        pad = torch.zeros((tensor.ndim - 1) * 2)
+        pad = torch.zeros(2, dtype=torch.long)
         # Pad on the left if we are on the left half of the dataset, otherwise on the right.
-        pad_pos = pad_axis if index < self.__len__() // 2 else pad_axis + 1
-        pad[pad_pos] = self.samples_per_item - tensor.shape[pad_axis]
+        pad_pos = 0 if index < self.__len__() // 2 else 1
+        pad[pad_pos] = self.samples_per_item - tensor.shape[-1]
         return F.pad(
             tensor,
             pad.tolist(),
@@ -139,9 +139,11 @@ class LibriBrainSpeechDataset(Dataset):
             label = self.dataset[index][1][label_from_the_middle_idx]
             metadata = torch.tensor([speech_density, speech_proximity])
         else:
-            sensors = self.pad_to_length(sensors, index, 1)
+            sensors = self.pad_to_length(sensors, index)
             label = torch.tensor(0)
             metadata = torch.tensor([0, 0])
+
+        assert sensors.shape[0] == 306, f"{index}: {sensors.shape}"
 
         return [
             self.sensor_positions,

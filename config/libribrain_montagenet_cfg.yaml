@@ -6,6 +6,7 @@ dropout: 0.1
 scale_exponent: -0.25
 return_latents: middle 
 n_blocks: 2
+epsilon_max: 0.1
 data_config:
   n_channels: 306
   max_sr: 250

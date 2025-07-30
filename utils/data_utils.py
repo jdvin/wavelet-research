@@ -735,6 +735,8 @@ def get_libri_brain_speech_dataset(
         ),
         sensor_positions=torch.tensor(sensor_positions),
         sensors_speech_mask=sensor_mask,
+        tmin=tmin,
+        tmax=tmax,
     )
 
 
