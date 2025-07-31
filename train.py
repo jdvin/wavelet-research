@@ -81,7 +81,11 @@ def main(
     )
     grad_accum_steps = cfg.batch_size // (cfg.train_micro_batch_size * cfg.world_size)
     model_config = MontageNetConfig(
-        **load_yaml(model_config_path), tasks=[TaskConfig(key="speech", n_classes=2)]
+        **load_yaml(model_config_path),
+        tasks=[
+            TaskConfig(key="speech", n_classes=2),
+            TaskConfig(key="speech_smooth", n_classes=2),
+        ],
     )
 
     setup(

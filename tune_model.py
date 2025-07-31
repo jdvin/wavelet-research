@@ -2,6 +2,7 @@ import os
 import argparse
 from loguru import logger
 import requests
+import pickle
 import json
 import gc
 from typing import Iterator, Tuple, Optional
@@ -77,9 +78,9 @@ def generate_logits_streaming(
             break
 
         # For your submission, this is where you would generate your model prediction:
-        # loss, logits, labels = model(batch)
-        labels = batch["labels"]
-        logits = torch.randn((labels.shape[0], 2))
+        loss, logits, labels = model(batch)
+        # labels = batch["labels"]
+        # logits = torch.randn((labels.shape[0], 2))
 
         # Convert to numpy and yield immediately to avoid accumulation
         batch_logits = logits.detach().cpu().to(dtype=torch.float32).numpy()
@@ -115,7 +116,8 @@ def fit_incremental_regressor(model, dataloader, device) -> SGDClassifier:
         else:
             # Update with subsequent batches
             regressor.partial_fit(batch_logits, batch_labels)
-
+    with open("tune/regressor.pkl", "wb") as f:
+        pickle.dump(regressor, f)
     return regressor
 
 
@@ -138,9 +140,9 @@ def predict_streaming(regressor, model, dataloader, device, output_file: str):
         ):
             batch_probs = regressor.predict_proba(batch_logits)
             predictions.append(batch_probs)
-            break
 
         all_predictions = np.vstack(predictions)
+        np.save("tune/predictions", all_predictions)
 
         return all_predictions
 
@@ -166,6 +168,8 @@ def evaluate_streaming(regressor, model, dataloader, device) -> float:
     # Final concatenation for F1 calculation
     predicted_labels = np.concatenate(all_predicted_labels)
     true_labels = np.concatenate(all_true_labels)
+    np.save("tune/predicted_labels", predicted_labels)
+    np.save("tune/true_labels", true_labels)
 
     score = f1_score(true_labels, predicted_labels, labels=[0, 1], average="macro")
 
@@ -194,8 +198,12 @@ def main(
     if model_checkpoint_path is not None:
         logger.info(f"Loading model from {model_checkpoint_path}")
         model.load_state_dict(
-            torch.load(model_checkpoint_path, map_location=device, dtype=torch.bfloat16)
+            torch.load(
+                model_checkpoint_path,
+            )
         )
+        model.eval()
+        model.to(device, dtype=torch.bfloat16)
     else:
         logger.warning(
             "No model checkpoint path provided. Running random initialization."

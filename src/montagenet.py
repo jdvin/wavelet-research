@@ -397,16 +397,19 @@ class MontageNet(nn.Module):
         difficulties = self.compute_difficulty(speech_densities, labels)
         latents = self.encoder(channel_signals, channel_positions)
         losses, logits = [], []
-        for task_key, latent, label, difficulty in zip(
-            task_keys, latents, labels, difficulties
+        for task_key, latent, label, difficulty, speech_density in zip(
+            task_keys, latents, labels, difficulties, speech_densities
         ):
-            logit = self.task_heads[int(task_key.item())](latent)
-            logits.append(logit)
-            losses.append(
-                self.loss.multi_class_focal_loss(
-                    logit.unsqueeze(0), label.unsqueeze(0), difficulty
-                )
+            hard_logit = self.task_heads[int(task_key.item())](latent)
+            soft_logit = self.task_heads[int(task_key.item()) + 1](latent)
+            hard_loss = self.loss.multi_class_focal_loss(
+                hard_logit.unsqueeze(0), label.unsqueeze(0)
             )
+            soft_loss = self.loss.multi_class_focal_loss(
+                soft_logit.unsqueeze(0), label.unsqueeze(0), difficulty
+            )
+            logits.append(hard_logit)
+            losses.append(hard_loss + soft_loss)
         loss = torch.stack(losses).mean()
         logits = torch.stack(logits)
         return loss, logits, labels
