@@ -127,24 +127,21 @@ def predict_streaming(regressor, model, dataloader, device, output_file: str):
     """
     logger.info("Generating predictions in streaming mode...")
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", delete=False, suffix=".csv"
-    ) as temp_file:
-        temp_filename = temp_file.name
+    logits = []
+    predictions = []
 
-        # Write header if needed
-        predictions = []
+    for batch_logits, batch_labels in generate_logits_streaming(
+        model, dataloader, device
+    ):
+        logits.append(batch_logits)
+        batch_probs = regressor.predict_proba(batch_logits)
+        predictions.append(batch_probs)
 
-        for batch_logits, batch_labels in generate_logits_streaming(
-            model, dataloader, device
-        ):
-            batch_probs = regressor.predict_proba(batch_logits)
-            predictions.append(batch_probs)
+    all_predictions = np.vstack(predictions)
+    np.save("tune/test_logits", np.vstack(logits))
+    np.save("tune/test_predictions", all_predictions)
 
-        all_predictions = np.vstack(predictions)
-        np.save("tune/predictions", all_predictions)
-
-        return all_predictions
+    return all_predictions
 
 
 def evaluate_streaming(regressor, model, dataloader, device) -> float:
@@ -153,13 +150,17 @@ def evaluate_streaming(regressor, model, dataloader, device) -> float:
     """
     logger.info("Evaluating model performance...")
 
+    all_predicted_logits = []
+    all_predicted_probs = []
     all_predicted_labels = []
     all_true_labels = []
 
     for batch_logits, batch_labels in generate_logits_streaming(
         model, dataloader, device
     ):
+        all_predicted_logits.append(batch_logits)
         batch_probs = regressor.predict_proba(batch_logits)
+        all_predicted_probs.append(batch_probs)
         batch_predicted_labels = batch_probs.argmax(axis=1)
 
         all_predicted_labels.append(batch_predicted_labels)
@@ -168,7 +169,9 @@ def evaluate_streaming(regressor, model, dataloader, device) -> float:
     # Final concatenation for F1 calculation
     predicted_labels = np.concatenate(all_predicted_labels)
     true_labels = np.concatenate(all_true_labels)
-    np.save("tune/predicted_labels", predicted_labels)
+    np.save("tune/tune_logits", np.concatenate(all_predicted_logits))
+    np.save("tune/tune_probs", np.concatenate(all_predicted_probs))
+    np.save("tune/tune_labels", predicted_labels)
     np.save("tune/true_labels", true_labels)
 
     score = f1_score(true_labels, predicted_labels, labels=[0, 1], average="macro")

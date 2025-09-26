@@ -401,15 +401,15 @@ class MontageNet(nn.Module):
             task_keys, latents, labels, difficulties, speech_densities
         ):
             hard_logit = self.task_heads[int(task_key.item())](latent)
-            soft_logit = self.task_heads[int(task_key.item()) + 1](latent)
+            # soft_logit = self.task_heads[int(task_key.item()) + 1](latent)
             hard_loss = self.loss.multi_class_focal_loss(
                 hard_logit.unsqueeze(0), label.unsqueeze(0)
             )
-            soft_loss = self.loss.multi_class_focal_loss(
-                soft_logit.unsqueeze(0), label.unsqueeze(0), difficulty
-            )
+            # soft_loss = self.loss.multi_class_focal_loss(
+            #     soft_logit.unsqueeze(0), label.unsqueeze(0), difficulty
+            # )
             logits.append(hard_logit)
-            losses.append(hard_loss + soft_loss)
+            losses.append(hard_loss)  # + soft_loss)
         loss = torch.stack(losses).mean()
         logits = torch.stack(logits)
         return loss, logits, labels

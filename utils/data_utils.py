@@ -663,6 +663,7 @@ def get_eeg_mmi_dataset(
     labels_map: dict[str, int],
     tasks_map: dict[str, int],
     reset_cache: bool = False,
+    sensor_mask: list[int] | None = None,
 ) -> dict[str, np.memmap]:
     ret = {}
     os.makedirs(output_path, exist_ok=True)
@@ -674,7 +675,12 @@ def get_eeg_mmi_dataset(
             source_base_path, split, output_path, reset_cache
         )
         dataset = MappedLabelDataset(
-            split_eeg, split_labels, labels_map, tasks_map, electrode_positions
+            split_eeg,
+            split_labels,
+            labels_map,
+            tasks_map,
+            electrode_positions,
+            sensor_mask,
         )
         ret[split_name] = dataset
     return ret
