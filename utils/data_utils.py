@@ -8,6 +8,7 @@ import requests
 import mne
 from loguru import logger
 import numpy as np
+import pandas as pd
 import torch
 from torch import Tensor
 from tqdm import tqdm
@@ -500,6 +501,39 @@ ANNOTATION_CODE_MAP: dict[int, dict[str, Annotation]] = {
 }
 
 
+EMOTIV_HEADSET_POSITION_FILES: dict[str, str] = {
+    "EPOC": "emotiv_epoc14_xyz_standard1020.csv",
+    "EPOCPLUS": "emotiv_epoc14_xyz_standard1020.csv",
+    "EPOCX": "emotiv_epoc14_xyz_standard1020.csv",
+    "INSIGHT": "emotiv_insight5_xyz_standard1020.csv",
+}
+
+EMOTIV_EVENT_TYPE_TO_LABEL = {
+    "eyesopen_element": "eyes_open",
+    "eyesopen": "eyes_open",
+    "eyesclose_element": "eyes_closed",
+    "eyesclose": "eyes_closed",
+}
+
+EMOTIV_TASK_LABEL = "alpha_suppression"
+
+
+@dataclass
+class EmotivEventInfo:
+    label: str
+    start_idx: int
+    end_idx: int
+    num_epochs: int
+
+
+@dataclass
+class EmotivRecordingInfo:
+    data_path: str
+    headset: str
+    sample_count: int
+    events: list[EmotivEventInfo]
+
+
 @dataclass
 class EEGMMISplit:
     name: str
@@ -653,6 +687,277 @@ def extract_eeg_mmi_split(
     np.save(labels_path, split_labels)
     return np.load(eeg_path, mmap_mode="r", allow_pickle=True), np.load(
         labels_path, mmap_mode="r", allow_pickle=True
+    )
+
+
+def _load_emotiv_headset_positions(
+    base_path: str,
+) -> tuple[dict[str, list[str]], list[str], np.ndarray]:
+    positions_cache: dict[str, tuple[list[str], np.ndarray]] = {}
+    headset_channels: dict[str, list[str]] = {}
+    channel_positions: dict[str, np.ndarray] = {}
+    channel_order: list[str] = []
+    for headset, filename in EMOTIV_HEADSET_POSITION_FILES.items():
+        position_path = os.path.join(base_path, filename)
+        if not os.path.exists(position_path):
+            raise FileNotFoundError(
+                f"Missing electrode position file for {headset}: {position_path}"
+            )
+        if filename not in positions_cache:
+            df = pd.read_csv(position_path)
+            if not {"label", "x", "y", "z"}.issubset(df.columns):
+                raise ValueError(
+                    f"Electrode position file {position_path} lacks required columns"
+                )
+            labels = df["label"].astype(str).tolist()
+            coords = df[["x", "y", "z"]].to_numpy(dtype=np.float32)
+            positions_cache[filename] = (labels, coords)
+        labels, coords = positions_cache[filename]
+        headset_channels[headset] = labels
+        for label, coord in zip(labels, coords):
+            if label not in channel_positions:
+                channel_positions[label] = np.asarray(coord, dtype=np.float32)
+                channel_order.append(label)
+    positions = np.stack([channel_positions[label] for label in channel_order], axis=0)
+    return headset_channels, channel_order, positions.astype(np.float32, copy=False)
+
+
+def _extract_emotiv_headset_name(filename: str) -> str | None:
+    stem, _ = os.path.splitext(os.path.basename(filename))
+    if stem.endswith("_markers"):
+        stem = stem[: -len("_markers")]
+    parts = stem.split("_")
+    if len(parts) < 2:
+        return None
+    return parts[1].upper()
+
+
+def _build_emotiv_recording_info(
+    data_path: str,
+    marker_path: str,
+    headset: str,
+    epoch_length: int,
+) -> EmotivRecordingInfo:
+    timestamps_df = pd.read_csv(data_path, usecols=["Timestamp"])
+    if "Timestamp" not in timestamps_df.columns:
+        raise ValueError(f"Timestamp column missing in {data_path}")
+    timestamps = timestamps_df["Timestamp"].to_numpy(dtype=np.float64)
+    sample_count = int(timestamps.shape[0])
+    if sample_count == 0:
+        return EmotivRecordingInfo(
+            data_path=data_path,
+            headset=headset,
+            sample_count=0,
+            events=[],
+        )
+
+    markers_df = pd.read_csv(
+        marker_path,
+        usecols=["timestamp", "duration", "type"],
+    )
+    markers_df["timestamp"] = pd.to_numeric(
+        markers_df["timestamp"], errors="coerce"
+    )
+    markers_df["duration"] = pd.to_numeric(
+        markers_df["duration"], errors="coerce"
+    )
+    markers_df = markers_df.dropna(subset=["timestamp", "duration", "type"])
+
+    events: list[EmotivEventInfo] = []
+    for _, row in markers_df.iterrows():
+        event_type = str(row["type"]).strip().lower()
+        label = EMOTIV_EVENT_TYPE_TO_LABEL.get(event_type)
+        if label is None:
+            continue
+        start_time = float(row["timestamp"])
+        duration = float(row["duration"])
+        if duration <= 0:
+            continue
+        start_idx = int(np.searchsorted(timestamps, start_time, side="left"))
+        if start_idx >= sample_count:
+            continue
+        end_time = start_time + duration
+        end_idx = int(np.searchsorted(timestamps, end_time, side="right"))
+        end_idx = min(end_idx, sample_count)
+        num_samples = end_idx - start_idx
+        if num_samples <= 0:
+            continue
+        num_epochs = num_samples // epoch_length
+        if num_epochs <= 0:
+            continue
+        effective_end_idx = start_idx + num_epochs * epoch_length
+        events.append(
+            EmotivEventInfo(
+                label=label,
+                start_idx=start_idx,
+                end_idx=effective_end_idx,
+                num_epochs=num_epochs,
+            )
+        )
+
+    return EmotivRecordingInfo(
+        data_path=data_path,
+        headset=headset,
+        sample_count=sample_count,
+        events=events,
+    )
+
+
+def _write_emotiv_recording_data(
+    info: EmotivRecordingInfo,
+    epoch_length: int,
+    headset_channels: dict[str, list[str]],
+    channel_order: list[str],
+    channel_to_index: dict[str, int],
+    eeg_store: np.ndarray,
+    labels_store: np.ndarray,
+    start_epoch_idx: int,
+) -> int:
+    channels = headset_channels.get(info.headset)
+    if channels is None:
+        raise ValueError(f"Unsupported headset '{info.headset}' for path {info.data_path}")
+    usecols = ["Timestamp"] + [f"EEG.{channel}" for channel in channels]
+    df = pd.read_csv(
+        info.data_path,
+        usecols=usecols,
+        na_values=["NULL"],
+    ).fillna(0.0)
+    timestamps = df.pop("Timestamp").to_numpy(dtype=np.float64)
+    if timestamps.shape[0] != info.sample_count:
+        logger.warning(
+            "Timestamp count mismatch for %s (expected %s, got %s)",
+            info.data_path,
+            info.sample_count,
+            timestamps.shape[0],
+        )
+    signals = np.zeros((len(channel_order), timestamps.shape[0]), dtype=np.float32)
+    for channel in channels:
+        column_name = f"EEG.{channel}"
+        if column_name not in df:
+            continue
+        channel_data = df[column_name].to_numpy(dtype=np.float32, copy=False)
+        np.nan_to_num(channel_data, copy=False)
+        signals[channel_to_index[channel], : channel_data.shape[0]] = channel_data
+    np.nan_to_num(signals, copy=False)
+
+    next_epoch_idx = start_epoch_idx
+    for event in info.events:
+        epoch_start = event.start_idx
+        for _ in range(event.num_epochs):
+            epoch_end = epoch_start + epoch_length
+            if epoch_end > signals.shape[1]:
+                break
+            eeg_store[next_epoch_idx, :, :] = signals[:, epoch_start:epoch_end]
+            labels_store[next_epoch_idx, 0] = EMOTIV_TASK_LABEL
+            labels_store[next_epoch_idx, 1] = event.label
+            next_epoch_idx += 1
+            epoch_start = epoch_end
+    return next_epoch_idx
+
+
+def extract_emotiv_alpha_suppression_split(
+    base_path: str,
+    output_path: str,
+    epoch_length: int,
+    reset_cache: bool = False,
+) -> tuple[np.memmap, np.memmap]:
+    os.makedirs(output_path, exist_ok=True)
+    dataset_prefix = "emotiv_alpha_suppression"
+    eeg_output_path = os.path.join(output_path, f"{dataset_prefix}_eeg.npy")
+    labels_output_path = os.path.join(output_path, f"{dataset_prefix}_labels.npy")
+    positions_output_path = os.path.join(output_path, f"{dataset_prefix}_positions.npz")
+
+    if (
+        os.path.exists(eeg_output_path)
+        and os.path.exists(labels_output_path)
+        and not reset_cache
+    ):
+        if not os.path.exists(positions_output_path):
+            headset_channels, channel_order, positions = _load_emotiv_headset_positions(
+                base_path
+            )
+            np.savez(
+                positions_output_path,
+                labels=np.array(channel_order, dtype="<U32"),
+                positions=positions,
+            )
+        return np.load(eeg_output_path, mmap_mode="r", allow_pickle=True), np.load(
+            labels_output_path, mmap_mode="r", allow_pickle=True
+        )
+
+    headset_channels, channel_order, positions = _load_emotiv_headset_positions(
+        base_path
+    )
+    np.savez(
+        positions_output_path,
+        labels=np.array(channel_order, dtype="<U32"),
+        positions=positions,
+    )
+    channel_to_index = {label: idx for idx, label in enumerate(channel_order)}
+
+    data_files = sorted(
+        [
+            os.path.join(base_path, fname)
+            for fname in os.listdir(base_path)
+            if fname.startswith("Alpha Supression_")
+            and fname.endswith(".csv")
+            and not fname.endswith("_markers.csv")
+        ]
+    )
+
+    recordings: list[EmotivRecordingInfo] = []
+    total_epochs = 0
+    for data_path in data_files:
+        headset = _extract_emotiv_headset_name(data_path)
+        if headset is None or headset not in headset_channels:
+            logger.warning("Skipping %s due to unsupported headset", data_path)
+            continue
+        marker_path = data_path.replace(".csv", "_markers.csv")
+        if not os.path.exists(marker_path):
+            logger.warning("Missing marker file for %s", data_path)
+            continue
+        recording = _build_emotiv_recording_info(
+            data_path=data_path,
+            marker_path=marker_path,
+            headset=headset,
+            epoch_length=epoch_length,
+        )
+        epoch_count = sum(event.num_epochs for event in recording.events)
+        if epoch_count == 0:
+            logger.warning("No usable eyes-open/closed data in %s", data_path)
+            continue
+        recordings.append(recording)
+        total_epochs += epoch_count
+
+    if total_epochs == 0:
+        raise ValueError(
+            "No eyes-open or eyes-closed epochs were extracted from the Emotiv dataset."
+        )
+
+    channel_count = len(channel_order)
+    eeg_store = np.zeros(
+        (total_epochs, channel_count, epoch_length), dtype=np.float32
+    )
+    labels_store = np.zeros((total_epochs, 2), dtype="<U32")
+
+    epoch_cursor = 0
+    for recording in recordings:
+        epoch_cursor = _write_emotiv_recording_data(
+            info=recording,
+            epoch_length=epoch_length,
+            headset_channels=headset_channels,
+            channel_order=channel_order,
+            channel_to_index=channel_to_index,
+            eeg_store=eeg_store,
+            labels_store=labels_store,
+            start_epoch_idx=epoch_cursor,
+        )
+
+    np.save(eeg_output_path, eeg_store)
+    np.save(labels_output_path, labels_store)
+
+    return np.load(eeg_output_path, mmap_mode="r", allow_pickle=True), np.load(
+        labels_output_path, mmap_mode="r", allow_pickle=True
     )
 
 

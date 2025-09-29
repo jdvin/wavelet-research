@@ -14,6 +14,7 @@ dependencies = [
     "numpy>=2.2.6",
     "numpy-stl>=3.2.0",
     "osfclient>=0.0.5",
+    "pandas>=2.2.3",
     "plotly>=6.1.2",
     "pnpl>=0.0.4",
     "pytorch-memlab>=0.3.0",
