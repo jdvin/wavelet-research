@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Iterable
 from functools import partial
 import torch
 from torch import einsum as einsum
@@ -9,6 +9,8 @@ from torch import Tensor
 from torch.nn import functional as F
 from rotary_embedding_torch import RotaryEmbedding
 from einops import rearrange, repeat
+from math import gcd
+from functools import reduce
 
 from src.components.focal_loss import FocalLoss
 from src.components.norm import RMSNorm
@@ -171,12 +173,11 @@ class ReturnLatents(Enum):
 
 @dataclass
 class DataConfig:
-    n_channels: int
-    # Maximum sampling rate used.
-    max_sr: int
-    # Minimum sampling rate used.
-    min_sr: int
-    # lowest frequency that the embedding can capture.
+    # Number of channel for each data source.
+    channel_counts: list[int]
+    # Sampling rate for each data source.
+    sampling_rates: list[int]
+    # lowest frequency that the embedding should capture.
     f_min: int
 
 
@@ -184,6 +185,79 @@ class DataConfig:
 class TaskConfig:
     key: str
     n_classes: int
+
+
+def lcm2(a: int, b: int) -> int:
+    if a == 0 or b == 0:
+        return 0
+    return abs(a) // gcd(a, b) * abs(b)
+
+
+def lcmN(*nums: int) -> int:
+    return reduce(lcm2, nums, 1)
+
+
+class Embedder(nn.Module):
+    def __init__(
+        self,
+        data_config: DataConfig,
+        d_model: int,
+    ):
+        super().__init__()
+        lcm = lcmN(*[sr for sr in data_config.sampling_rates])
+        self.insertion_steps = {sr: lcm // sr for sr in data_configs.sampling_rates}
+        emb_kernel_size = int(lcm / data_config.f_min)
+        self.embed = nn.Conv1d(
+            in_channels=1,
+            out_channels=d_model,
+            kernel_size=emb_kernel_size,
+            stride=1,
+            padding="same",
+        )
+
+    def zeropad_and_stack(self, tensors: Iterable[Tensor], max_len: int):
+        """
+        Args:
+            tensors (tuple[torch.Tensor]): tuple of 1D tensors, e.g. (t1, t2, ...)
+        Returns:
+            torch.Tensor: 2D tensor of shape (len(tensors), max_len)
+        """
+        padded = [
+            F.pad(t, (0, max_len - t.size(0))) for t in tensors  # pad only on the right
+        ]
+        return torch.stack(padded)
+
+    def upsample_zerofill(self, x: Tensor, sr: int) -> tuple[Tensor, Tensor]:
+        IS = self.insertion_steps[sr]
+        y = torch.zeros(len(x) * IS, dtype=x.dtype, device=x.device)
+        y[::IS] = x
+        m = torch.zeros_like(y)
+        m[::IS] = 1
+        return y, m
+
+    def forward(self, x: dict[int, Tensor]) -> tuple[Tensor, Tensor]:
+        ## IN THEORY:
+        X, M = [], []
+        max_len = 0
+        # Upsample each tensor to a common sampling rate.
+        for sr, x_i in x.items():
+            max_len = max(max_len, len(x_i))
+            y, m = self.upsample_zerofill(x_i, sr)
+            X.append(y)
+            M.append(m)
+        X = torch.stack(X)
+        M = torch.stack(M)
+        # To be returned and used by RoPE modules.
+        # Zero padding this is fine because the embeddings will be zeroed anyway.
+        S = self.zeropad_and_stack(torch.nonzero(M, as_tuple=True), max_len)
+        # Embed the upsamples tensors.
+        X = self.embed(X)
+        # Select umasked embeddings (i.e., those that represent data from the original signal).
+        X_ = []
+        for x_, m_ in zip(X, M):
+            X_.append(x_[m_])
+        X = self.zeropad_and_stack(X_, max_len)
+        return X, S
 
 
 class SpatioTemporalPerceiverResampler(nn.Module):
@@ -214,7 +288,6 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             padding="same",
         )
         self.embed_positions = nn.Linear(3, d_model)
-        self.embed_channels = nn.Embedding(306, d_model)
         self.embed_l_out = lambda T: int((T - emb_kernel_size) / emb_stride + 1)
         rotary_embedding = RotaryEmbedding(dim=32, cache_max_seq_len=256)
         self.blocks = nn.ModuleList(
@@ -241,21 +314,21 @@ class SpatioTemporalPerceiverResampler(nn.Module):
     ) -> Tensor:
         B, C, T = source.shape
         T_emb = T  # self.embed_l_out(T)
-        # pos_emb = repeat(
-        #     self.embed_positions(channel_positions),
-        #     "B C D -> B C D T_emb",
-        #     B=B,
-        #     T_emb=T_emb,
-        #     D=self.d_model,
-        # )
-        chan_embed = repeat(
-            self.embed_channels.weight,
-            "C D -> B C D T_emb",
+        pos_emb = repeat(
+            self.embed_positions(channel_positions),
+            "B C D -> B C D T_emb",
             B=B,
-            C=C,
             T_emb=T_emb,
             D=self.d_model,
         )
+        # chan_embed = repeat(
+        #     self.embed_channels.weight,
+        #     "C D -> B C D T_emb",
+        #     B=B,
+        #     C=C,
+        #     T_emb=T_emb,
+        #     D=self.d_model,
+        # )
         source = rearrange(
             self.embed(rearrange(source, "B C T -> (B C) 1 T")),
             "(B C) D T_emb -> B C D T_emb",
@@ -263,7 +336,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             C=C,
             D=self.d_model,
         )
-        source = rearrange(source + chan_embed, "B C D T_emb -> (B T_emb) C D")
+        source = rearrange(source + pos_emb, "B C D T_emb -> (B T_emb) C D")
         # source = rearrange(source, "B C D T_emb -> (B T_emb) C D")
         # Initialize query latents
         latents = repeat(
@@ -311,7 +384,6 @@ class MontageNetConfig:
     n_blocks: int
     tasks: list[TaskConfig]
     data_config: DataConfig
-    epsilon_max: float
 
     def __init__(
         self,
@@ -323,9 +395,8 @@ class MontageNetConfig:
         scale_exponent,
         return_latents,
         n_blocks,
-        tasks,
+        tasks: list[dict[str, Any]],
         data_config: dict[str, Any],
-        epsilon_max: float,
     ):
         self.n_latents = n_latents
         self.d_model = d_model
@@ -334,10 +405,9 @@ class MontageNetConfig:
         self.dropout = dropout
         self.scale_exponent = scale_exponent
         self.n_blocks = n_blocks
-        self.tasks = tasks
+        self.tasks = [TaskConfig(**task) for task in tasks]
         self.data_config = DataConfig(**data_config)
         self.return_latents = ReturnLatents(return_latents)
-        self.epsilon_max = epsilon_max
 
 
 class MontageNet(nn.Module):
@@ -371,45 +441,34 @@ class MontageNet(nn.Module):
                 for task in config.tasks
             ]
         )
-        self.loss = FocalLoss(
-            # alpha=torch.tensor([0.666, 0.333]),
-            task_type="multi-class",
-            num_classes=2,
-            reduction="",
-        )
-        self.epsilon_max = config.epsilon_max
-        # self.loss = partial(F.cross_entropy, label_smoothing=0.1)
 
-    def compute_difficulty(self, speech_densities: Tensor, labels: Tensor):
-        return self.epsilon_max * (
+        self.loss = partial(F.cross_entropy, label_smoothing=0.1)
+
+    def compute_difficulty(
+        self, epsilon: float, speech_densities: Tensor, labels: Tensor
+    ):
+        return epsilon * (
             (1 - labels) * speech_densities + labels * (1 - speech_densities)
         )
 
     def forward(self, batch: dict[str, Tensor]):
-        channel_positions, task_keys, channel_signals, labels, metadata = (
+        channel_positions, task_keys, channel_signals, labels = (
             batch["channel_positions"],
             batch["tasks"],
             batch["channel_signals"],
             batch["labels"],
-            batch["metadata"],
         )
-        speech_densities = metadata[:, 0]
-        difficulties = self.compute_difficulty(speech_densities, labels)
         latents = self.encoder(channel_signals, channel_positions)
         losses, logits = [], []
-        for task_key, latent, label, difficulty, speech_density in zip(
-            task_keys, latents, labels, difficulties, speech_densities
-        ):
-            hard_logit = self.task_heads[int(task_key.item())](latent)
-            # soft_logit = self.task_heads[int(task_key.item()) + 1](latent)
-            hard_loss = self.loss.multi_class_focal_loss(
-                hard_logit.unsqueeze(0), label.unsqueeze(0)
-            )
-            # soft_loss = self.loss.multi_class_focal_loss(
-            #     soft_logit.unsqueeze(0), label.unsqueeze(0), difficulty
-            # )
-            logits.append(hard_logit)
-            losses.append(hard_loss)  # + soft_loss)
+        for (
+            task_key,
+            latent,
+            label,
+        ) in zip(task_keys, latents, labels):
+            logit = self.task_heads[int(task_key.item())](latent)
+            loss = self.loss(logit.unsqueeze(0), label.unsqueeze(0))
+            logits.append(logit)
+            losses.append(loss)
         loss = torch.stack(losses).mean()
         logits = torch.stack(logits)
         return loss, logits, labels
