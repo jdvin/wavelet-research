@@ -80,13 +80,7 @@ def main(
         checkpoints=checkpoints,
     )
     grad_accum_steps = cfg.batch_size // (cfg.train_micro_batch_size * cfg.world_size)
-    model_config = MontageNetConfig(
-        **load_yaml(model_config_path),
-        tasks=[
-            TaskConfig(key="speech", n_classes=2),
-            TaskConfig(key="speech_smooth", n_classes=2),
-        ],
-    )
+    model_config = MontageNetConfig(**load_yaml(model_config_path))
 
     setup(
         rank=rank,
@@ -186,7 +180,7 @@ def main(
         ds = ds_getter()
         ds = {
             "train": ds["train"],
-            "speech_val": ds["eyes_val"],
+            "eyes_val": ds["eyes_val"],
         }
 
         if world_size > 1:
@@ -196,15 +190,13 @@ def main(
         ds = ds_getter()
         ds = {
             "train": ds["train"],
-            "speech_val": ds["eyes_val"],
+            "eyes_val": ds["eyes_val"],
         }
 
     logger.info("Creating data loaders.")
 
     train_collate_fn = eeg_mmi_collate_fn
     val_collate_fn = eeg_mmi_collate_fn
-    train_collate_fn = libri_speech_brain_collate_fn
-    val_collate_fn = libri_speech_brain_collate_fn
 
     # Create data loaders.
     (
