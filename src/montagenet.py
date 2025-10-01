@@ -236,7 +236,13 @@ class Embedder(nn.Module):
         return y, m
 
     def forward(self, x: dict[int, Tensor]) -> tuple[Tensor, Tensor]:
-        ## IN THEORY:
+        ## ! THIS IS GOING TO CREATE VERY BIG ACTIVATION MATRICES.
+        ## ASSUME ~5K LCM, THEN AT BF16 WERE RUNNING 10KB PER EXAMPLE SECOND.
+        ## ALTERNATIVE IS TO EMBED EACH SAMPLE WITH A LINEAR, CACULATE UPSAMPLED/INTERPOLATED SEQ POS'S
+        ## THEN PERFORM ROPE WITH THEM
+        ##
+        ## SKIPPING THE CONV THEREFORE SKIPPING THE NEED TO UPSAMPLE SIGNALS.
+
         X, M = [], []
         max_len = 0
         # Upsample each tensor to a common sampling rate.

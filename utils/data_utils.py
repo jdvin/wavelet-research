@@ -535,12 +535,42 @@ class EmotivRecordingInfo:
 
 
 @dataclass
-class EEGMMISplit:
-    name: str
+class DataSplit:
+    """Base class for data splits.
+
+    Use to uniquely define a division of a particular dataset.
+    Creates a unique code for the split."""
+
+    ds_name: str
+    split_name: str
     subjects: list[int]
+    max_subjects: int
+
+    base_path: str
+    output_path: str
+    
+    sensor_mask: list[int] | None
+
+    def code(self) -> str:
+        # Hack bc subjects and sessions are 1-indexed.
+        subjects_onehot = np.zeros(self.max_subjects + 1, dtype=int)
+        subjects_onehot[self.subjects] = 1
+        return f"{self.ds_name}-sub-{''.join(str(s) for s in subjects_onehot.tolist())}"
+
+
+@dataclass
+class EmotivAlphaDataSplit(DataSplit):
+    ds_name: str = "emotiv_alpha"
+    max_subjects: int = 27
+
+
+@dataclass
+class EEGMMIDataSplit(DataSplit):
     sessions: list[int]
     max_subjects: int = 109
     max_sessions: int = 14
+    ds_name: str = "eeg_mmi"
+    
 
     def code(self) -> str:
         # Hack bc subjects and sessions are 1-indexed.
@@ -755,12 +785,8 @@ def _build_emotiv_recording_info(
         marker_path,
         usecols=["timestamp", "duration", "type"],
     )
-    markers_df["timestamp"] = pd.to_numeric(
-        markers_df["timestamp"], errors="coerce"
-    )
-    markers_df["duration"] = pd.to_numeric(
-        markers_df["duration"], errors="coerce"
-    )
+    markers_df["timestamp"] = pd.to_numeric(markers_df["timestamp"], errors="coerce")
+    markers_df["duration"] = pd.to_numeric(markers_df["duration"], errors="coerce")
     markers_df = markers_df.dropna(subset=["timestamp", "duration", "type"])
 
     events: list[EmotivEventInfo] = []
@@ -815,7 +841,9 @@ def _write_emotiv_recording_data(
 ) -> int:
     channels = headset_channels.get(info.headset)
     if channels is None:
-        raise ValueError(f"Unsupported headset '{info.headset}' for path {info.data_path}")
+        raise ValueError(
+            f"Unsupported headset '{info.headset}' for path {info.data_path}"
+        )
     usecols = ["Timestamp"] + [f"EEG.{channel}" for channel in channels]
     df = pd.read_csv(
         info.data_path,
@@ -935,9 +963,7 @@ def extract_emotiv_alpha_suppression_split(
         )
 
     channel_count = len(channel_order)
-    eeg_store = np.zeros(
-        (total_epochs, channel_count, epoch_length), dtype=np.float32
-    )
+    eeg_store = np.zeros((total_epochs, channel_count, epoch_length), dtype=np.float32)
     labels_store = np.zeros((total_epochs, 2), dtype="<U32")
 
     epoch_cursor = 0
@@ -989,6 +1015,14 @@ def get_eeg_mmi_dataset(
         )
         ret[split_name] = dataset
     return ret
+
+
+def get_multi_mapped_label_datasets(
+    splits: dict[str, DataSplit],
+    labels_map: dict[str, int],
+    tasks_map: dict[str, int],
+    reset_cache: bool = False,
+        )
 
 
 def get_libri_brain_speech_dataset(

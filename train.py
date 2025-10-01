@@ -16,7 +16,8 @@ from torch.amp.grad_scaler import GradScaler
 from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 from utils.data_utils import (
-    EEGMMISplit,
+    EEGMMIDataSplit,
+    EmotivAlphaDataSplit,
     eeg_mmi_collate_fn,
     get_eeg_mmi_dataset,
     get_libri_brain_speech_dataset,
@@ -118,31 +119,36 @@ def main(
     # The first rank goes ahead to create the dataset if it does not already exist, before the other ranks then load it.
     # This is probably quite a strange pattern, but it is the simplest way to implement this behaviour.
     # TODO: Distributed dataset creation.
-    splits = {
-        "train": EEGMMISplit(
-            name="train",
-            subjects=list(range(1, 100)),
-            sessions=[1, 2],
-        ),
-        "eyes_val": EEGMMISplit(
-            name="val",
-            subjects=list(range(100, 110)),
-            sessions=[1, 2],
-        ),
-    }
-    # train_ds_getter = partial(
-    #     get_libri_brain_speech_dataset,
-    #     output_path="data/libri_brain_speech",
-    #     partition="train",
-    #     stride=100,
-    #     oversample_silence_jitter=35,
-    # )
-    # val_ds_getter = partial(
-    #     get_libri_brain_speech_dataset,
-    #     output_path="data/libri_brain_speech",
-    #     partition="validation",
-    #     oversample_silence_jitter=70,
-    # )
+    eeg_mmi_train_split = EEGMMIDataSplit(
+        base_path=...,
+        output_path=...,
+        split_name="train",
+        subjects=list(range(1, 100)),
+        sessions=[1, 2],
+        sensor_mask=None,
+    )
+    eeg_mmi_val_split = EEGMMIDataSplit(
+        base_path=...,
+        output_path=...,
+        split_name="eeg_mmi_eyes_val",
+        subjects=list(range(100, 110)),
+        sessions=[1, 2],
+        sensor_mask=None,
+    )
+    emotiv_alpha_train_split = EmotivAlphaDataSplit(
+        base_path=...,
+        output_path=...,
+        split_name="train",
+        subjects=list(set(range(1, 27)) - {6, 12, 27}),  # Lord forgive me.
+        sensor_mask=None,
+    )
+    emotive_alpha_val_split = EmotivAlphaDataSplit(
+        base_path=...,
+        output_path=...,
+        split_name="emotiv_alpha_eyes_val",
+        subjects=[6, 12, 27],
+        sensor_mask=None,
+    )
 
     # fronto_occipital_electrodes = (
     #     torch.tensor(
@@ -166,7 +172,7 @@ def main(
     # )
     # train_mask = get_nth_mask(model.module.data_config.max_channels, 2, 1)
     # val_mask = get_nth_mask(model.module.data_config.max_channels, 2, 2)
-    ds_getter = partial(
+    eeg_mmi_getter = partial(
         get_eeg_mmi_dataset,
         source_base_path=cfg.dataset_path,
         output_path="data/eeg_mmi",

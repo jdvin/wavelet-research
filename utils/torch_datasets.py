@@ -1,4 +1,6 @@
 import os
+from typing import Sequence
+
 import numpy as np
 from pnpl.datasets import LibriBrainCompetitionHoldout, LibriBrainSpeech
 from torch.utils.data import Dataset
@@ -60,6 +62,35 @@ class MappedLabelDataset(Dataset):
             input,
             self.labels_map[label],
         )
+
+
+class MultiMappedLabelDataset(Dataset):
+    def __init__(self, datasets: Sequence[MappedLabelDataset]):
+        if len(datasets) == 0:
+            raise ValueError("At least one dataset is required.")
+        self.datasets = list(datasets)
+        self.lengths = [len(ds) for ds in self.datasets]
+        self.total_length = sum(self.lengths)
+
+    def __len__(self) -> int:
+        return self.total_length
+
+    def __getitem__(self, index: int):
+        if index < 0:
+            index += self.total_length
+        if index < 0 or index >= self.total_length:
+            raise IndexError("Index out of range.")
+        for dataset, size in zip(self.datasets, self.lengths):
+            if index < size:
+                return dataset[index]
+            index -= size
+        # Should never reach here.
+        raise IndexError("Index out of range.")
+
+    def append_dataset(self, dataset: MappedLabelDataset):
+        self.datasets.append(dataset)
+        self.lengths.append(len(dataset))
+        self.total_length += len(dataset)
 
 
 LIBRI_BRAIN_SR = 250
