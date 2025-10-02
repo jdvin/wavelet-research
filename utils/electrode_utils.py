@@ -110,8 +110,12 @@ STANDARD_1020 = mne.channels.make_standard_montage("standard_1020").get_position
     "ch_pos"
 ]
 
-INSIGHT5_CHANNEL_POSITIONS = torch.tensor(STANDARD_1020[ch] for ch in INSIGHT5_CHANNELS)
-EPOC14_CHANNEL_POSITIONS = torch.tensor(STANDARD_1020[ch] for ch in EPOC14_CHANNELS)
+INSIGHT5_CHANNEL_POSITIONS = torch.tensor(
+    np.vstack([STANDARD_1020[ch] for ch in INSIGHT5_CHANNELS]), dtype=torch.float32
+)
+EPOC14_CHANNEL_POSITIONS = torch.tensor(
+    np.vstack([STANDARD_1020[ch] for ch in EPOC14_CHANNELS]), dtype=torch.float32
+)
 
 
 def physionet_64_montage():
@@ -131,7 +135,8 @@ def physionet_64_montage():
 
 
 PHYSIONET_64_CHANNEL_POSITIONS = torch.tensor(
-    list(physionet_64_montage().get_positions()["ch_pos"].values())
+    np.vstack(list(physionet_64_montage().get_positions()["ch_pos"].values())),
+    dtype=torch.float32,
 )
 
 

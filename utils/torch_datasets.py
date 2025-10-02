@@ -87,10 +87,11 @@ class MultiMappedLabelDataset(Dataset):
         # Should never reach here.
         raise IndexError("Index out of range.")
 
-    def append_dataset(self, dataset: MappedLabelDataset):
+    def append_dataset(self, dataset: MappedLabelDataset) -> None:
         self.datasets.append(dataset)
-        self.lengths.append(len(dataset))
-        self.total_length += len(dataset)
+        dataset_length = len(dataset)
+        self.lengths.append(dataset_length)
+        self.total_length += dataset_length
 
 
 LIBRI_BRAIN_SR = 250
