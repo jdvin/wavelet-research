@@ -4,7 +4,7 @@ import os
 from typing import Callable, Any
 import json
 import requests
-
+from collections import OrderedDict
 import mne
 from loguru import logger
 import numpy as np
@@ -18,8 +18,14 @@ from utils.torch_datasets import (
     LibriBrainSpeechDataset,
     MappedLabelDataset,
     EEGEyeNetDataset,
+    MultiMappedLabelDataset,
 )
-from utils.electrode_utils import physionet_64_montage
+from utils.electrode_utils import (
+    EPOC14_CHANNEL_POSITIONS,
+    INSIGHT5_CHANNEL_POSITIONS,
+    PHYSIONET_64_CHANNEL_POSITIONS,
+    physionet_64_montage,
+)
 
 
 class ValidationType(Enum):
@@ -96,6 +102,8 @@ ELECTRODE_ORDER = np.array(
         "AF8",
     ]
 )
+# Task AND label dtype. 11 character string.
+TASK_LABEL_DTYPE = np.dtype("<U32")
 
 
 def extract_eeg_eye_net_ds(
@@ -392,11 +400,11 @@ def get_things_100ms_collate_fn(
 
 class EEGMMITask(Enum):
     BASELINE_EYES_OPEN = "m_eyes_open"
-    BASELINE_EYES_CLOSED = "m_eyes_clos"
-    TASK_1 = "m_l__r_fist"
-    TASK_2 = "i_l__r_fist"
-    TASK_3 = "m_fist_feet"
-    TASK_4 = "i_fist_feet"
+    BASELINE_EYES_CLOSED = "m_eyes_closed"
+    TASK_1 = "move_left_right_fist"
+    TASK_2 = "imag_left_right_fist"
+    TASK_3 = "move_fist_feet"
+    TASK_4 = "imag_fist_feet"
 
 
 SESSION_TO_TASK = {
@@ -418,17 +426,17 @@ SESSION_TO_TASK = {
 
 
 class Annotation(Enum):
-    EYES_OPEN = "base_e_open"
-    EYES_CLOSED = "base_e_clos"
-    REST = "base_b_rest"
-    MOVE_LEFT_FIST = "move_l_fist"
-    MOVE_RIGHT_FIST = "move_r_fist"
-    MOVE_BOTH_FIST = "move_b_fist"
-    MOVE_BOTH_FEET = "move_b_feet"
-    IMAG_LEFT_FIST = "imag_l_fist"
-    IMAG_RIGHT_FIST = "imag_r_fist"
-    IMAG_BOTH_FIST = "imag_b_fist"
-    IMAG_BOTH_FEET = "imag_b_feet"
+    EYES_OPEN = "base_eyes_open"
+    EYES_CLOSED = "base_eyes_clos"
+    REST = "base_rest"
+    MOVE_LEFT_FIST = "move_left_fist"
+    MOVE_RIGHT_FIST = "move_right_fist"
+    MOVE_BOTH_FIST = "move_both_fist"
+    MOVE_BOTH_FEET = "move_both_feet"
+    IMAG_LEFT_FIST = "imag_left_fist"
+    IMAG_RIGHT_FIST = "imag_right_fist"
+    IMAG_BOTH_FIST = "imag_both_fist"
+    IMAG_BOTH_FEET = "imag_both_feet"
 
 
 ANNOTATION_CODE_MAP: dict[int, dict[str, Annotation]] = {
@@ -534,6 +542,17 @@ class EmotivRecordingInfo:
     events: list[EmotivEventInfo]
 
 
+class DataSource(Enum):
+    EEG_MMI = "eeg_mmi"
+    EMOTIVE_ALPHA = "emotive_alpha"
+
+
+class Headset(Enum):
+    PHYSIONET_64 = "physionet_64"
+    EMOTIV_INSIGHT_5 = "emotiv_insight_5"
+    EMOTIV_EPOC_14 = "emotiv_epoc_14"
+
+
 @dataclass
 class DataSplit:
     """Base class for data splits.
@@ -541,36 +560,18 @@ class DataSplit:
     Use to uniquely define a division of a particular dataset.
     Creates a unique code for the split."""
 
-    ds_name: str
     split_name: str
     subjects: list[int]
-    max_subjects: int
-
-    base_path: str
-    output_path: str
-    
-    sensor_mask: list[int] | None
-
-    def code(self) -> str:
-        # Hack bc subjects and sessions are 1-indexed.
-        subjects_onehot = np.zeros(self.max_subjects + 1, dtype=int)
-        subjects_onehot[self.subjects] = 1
-        return f"{self.ds_name}-sub-{''.join(str(s) for s in subjects_onehot.tolist())}"
-
-
-@dataclass
-class EmotivAlphaDataSplit(DataSplit):
-    ds_name: str = "emotiv_alpha"
-    max_subjects: int = 27
-
-
-@dataclass
-class EEGMMIDataSplit(DataSplit):
     sessions: list[int]
-    max_subjects: int = 109
-    max_sessions: int = 14
-    ds_name: str = "eeg_mmi"
-    
+    max_subjects: int
+    max_sessions: int
+    data_source: DataSource
+    headset: Headset
+
+    source_base_path: str
+    output_path: str
+
+    sensor_mask: list[int] | None
 
     def code(self) -> str:
         # Hack bc subjects and sessions are 1-indexed.
@@ -578,7 +579,29 @@ class EEGMMIDataSplit(DataSplit):
         subjects_onehot[self.subjects] = 1
         sessions_onehot = np.zeros(self.max_sessions + 1, dtype=int)
         sessions_onehot[self.sessions] = 1
-        return f"sub-{''.join(str(s) for s in subjects_onehot.tolist())}_sess-{''.join(str(s) for s in sessions_onehot.tolist())}"
+        return f"ds-{self.data_source.value}_hs-{self.headset.value}_sub-{''.join(str(s) for s in subjects_onehot.tolist())}_sess-{''.join(str(s) for s in sessions_onehot.tolist())}"
+
+
+class EmotivAlphaInsightDataSplit(DataSplit):
+    max_subjects: int = 14
+    max_sessions: int = 1
+    data_source: DataSource = DataSource.EMOTIVE_ALPHA
+    headset: Headset = Headset.EMOTIV_INSIGHT_5
+
+
+class EmotiveAlphaEpochDataSplit(DataSplit):
+    max_subjects: int = 13
+    max_sessions: int = 1
+    data_source: DataSource = DataSource.EMOTIVE_ALPHA
+    headset: Headset = Headset.EMOTIV_EPOC_14
+
+
+class EEGMMIDataSplit(DataSplit):
+    sessions: list[int]
+    max_subjects: int = 109
+    max_sessions: int = 14
+    data_source: DataSource = DataSource.EEG_MMI
+    headset: Headset = Headset.PHYSIONET_64
 
 
 def extract_eeg_mmi_session_data(
@@ -646,7 +669,7 @@ def extract_eeg_mmi_session_data(
         filename=os.path.join(output_path, f"{subject_str}{session_str}_labels.npy"),
         mode="r" if cached else "w+",
         shape=(len(events), 2),
-        dtype="<U11",
+        dtype=TASK_LABEL_DTYPE,
     )
     if cached:
         return session_eeg, session_labels
@@ -676,7 +699,7 @@ def extract_eeg_mmi_session_data(
 
 def extract_eeg_mmi_split(
     base_path: str,
-    split: EEGMMISplit,
+    split: EEGMMIDataSplit,
     output_path: str,
     reset_cache: bool = False,
 ):
@@ -687,6 +710,8 @@ def extract_eeg_mmi_split(
             labels_path, mmap_mode="r", allow_pickle=True
         )
     eegs, task_labels = [], []
+    # Store information about the shape of each session.
+    # [n_trials, n_channels, n_samples]
     shapes = np.zeros((len(split.subjects) * len(split.sessions), 3), dtype=int)
     for i, subject in enumerate(split.subjects):
         for j, session in enumerate(split.sessions):
@@ -703,9 +728,11 @@ def extract_eeg_mmi_split(
         shape=(n_trials, n_channels, n_samples),
         dtype=eegs[0].dtype,
     )
+    # We decide here that the labels are strings with 11 characters.
+    # Labels are: [task, annotation].
     split_labels = np.zeros(
         shape=(n_trials, 2),
-        dtype="<U11",
+        dtype=TASK_LABEL_DTYPE,
     )
     cum_trial = 0
     for shape, eeg, task_label in zip(shapes, eegs, task_labels):
@@ -721,45 +748,18 @@ def extract_eeg_mmi_split(
 
 
 def _load_emotiv_headset_positions(
-    base_path: str,
-) -> tuple[dict[str, list[str]], list[str], np.ndarray]:
-    positions_cache: dict[str, tuple[list[str], np.ndarray]] = {}
-    headset_channels: dict[str, list[str]] = {}
-    channel_positions: dict[str, np.ndarray] = {}
-    channel_order: list[str] = []
-    for headset, filename in EMOTIV_HEADSET_POSITION_FILES.items():
-        position_path = os.path.join(base_path, filename)
-        if not os.path.exists(position_path):
-            raise FileNotFoundError(
-                f"Missing electrode position file for {headset}: {position_path}"
-            )
-        if filename not in positions_cache:
-            df = pd.read_csv(position_path)
-            if not {"label", "x", "y", "z"}.issubset(df.columns):
-                raise ValueError(
-                    f"Electrode position file {position_path} lacks required columns"
-                )
-            labels = df["label"].astype(str).tolist()
-            coords = df[["x", "y", "z"]].to_numpy(dtype=np.float32)
-            positions_cache[filename] = (labels, coords)
-        labels, coords = positions_cache[filename]
-        headset_channels[headset] = labels
-        for label, coord in zip(labels, coords):
-            if label not in channel_positions:
-                channel_positions[label] = np.asarray(coord, dtype=np.float32)
-                channel_order.append(label)
-    positions = np.stack([channel_positions[label] for label in channel_order], axis=0)
-    return headset_channels, channel_order, positions.astype(np.float32, copy=False)
-
-
-def _extract_emotiv_headset_name(filename: str) -> str | None:
-    stem, _ = os.path.splitext(os.path.basename(filename))
-    if stem.endswith("_markers"):
-        stem = stem[: -len("_markers")]
-    parts = stem.split("_")
-    if len(parts) < 2:
-        return None
-    return parts[1].upper()
+    position_path: str,
+) -> dict[str, np.ndarray]:
+    if not os.path.exists(position_path):
+        raise FileNotFoundError(f"Missing electrode position file for {position_path}")
+    df = pd.read_csv(position_path)
+    if not {"label", "x", "y", "z"}.issubset(df.columns):
+        raise ValueError(
+            f"Electrode position file {position_path} lacks required columns"
+        )
+    labels = df["label"].astype(str).tolist()
+    coords = df[["x", "y", "z"]].to_numpy(dtype=np.float32)
+    return OrderedDict([(label, coord) for label, coord in zip(labels, coords)])
 
 
 def _build_emotiv_recording_info(
@@ -987,42 +987,50 @@ def extract_emotiv_alpha_suppression_split(
     )
 
 
-def get_eeg_mmi_dataset(
-    source_base_path: str,
-    output_path: str,
-    splits: dict[str, EEGMMISplit],
+def get_multi_mapped_label_datasets(
+    splits: list[DataSplit],
     labels_map: dict[str, int],
     tasks_map: dict[str, int],
     reset_cache: bool = False,
-    sensor_mask: list[int] | None = None,
-) -> dict[str, np.memmap]:
+):
     ret = {}
-    os.makedirs(output_path, exist_ok=True)
-    electrode_positions = torch.tensor(
-        list(physionet_64_montage().get_positions()["ch_pos"].values())
-    )
-    for split_name, split in splits.items():
-        split_eeg, split_labels = extract_eeg_mmi_split(
-            source_base_path, split, output_path, reset_cache
-        )
+    for split in splits:
+        os.makedirs(split.output_path, exist_ok=True)
+
+        if split.headset == Headset.PHYSIONET_64:
+            electrode_positions = PHYSIONET_64_CHANNEL_POSITIONS
+        elif split.headset == Headset.EMOTIV_INSIGHT_5:
+            electrode_positions = INSIGHT5_CHANNEL_POSITIONS
+        elif split.headset == Headset.EMOTIV_EPOC_14:
+            electrode_positions = EPOC14_CHANNEL_POSITIONS
+        else:
+            raise NotImplementedError(f"Unknown headset: {split.headset}")
+
+        if split.data_source == DataSource.EEG_MMI:
+            assert isinstance(split, EEGMMIDataSplit)
+            split_eeg, split_labels = extract_eeg_mmi_split(
+                split.source_base_path, split, split.output_path, reset_cache
+            )
+        elif split.data_source == DataSource.EMOTIVE_ALPHA:
+            split_eeg, split_labels = ...
+        else:
+            raise NotImplementedError(f"Unknown data source: {split.data_source}")
+
         dataset = MappedLabelDataset(
             split_eeg,
             split_labels,
             labels_map,
             tasks_map,
             electrode_positions,
-            sensor_mask,
+            split.sensor_mask,
         )
-        ret[split_name] = dataset
+
+        ds = ret.get(split.split_name, None)
+        if ds is None:
+            ret[split.split_name] = MultiMappedLabelDataset([dataset])
+        else:
+            ds.append_dataset(dataset)
     return ret
-
-
-def get_multi_mapped_label_datasets(
-    splits: dict[str, DataSplit],
-    labels_map: dict[str, int],
-    tasks_map: dict[str, int],
-    reset_cache: bool = False,
-        )
 
 
 def get_libri_brain_speech_dataset(

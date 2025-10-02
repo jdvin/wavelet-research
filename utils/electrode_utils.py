@@ -9,6 +9,7 @@ import requests, io, numpy as np
 from stl import mesh
 import plotly.graph_objects as go
 import plotly.io as pio
+import torch
 
 PHYSIONET_64_CHANNELS = [
     "FC5",
@@ -84,6 +85,34 @@ PHYSIONET_64_CHANNELS = [
     "Iz",
 ]
 
+# --- Emotiv channel sets (actives only) ---
+EPOC14_CHANNELS = [
+    "AF3",
+    "F7",
+    "F3",
+    "FC5",
+    "T7",
+    "P7",
+    "O1",
+    "O2",
+    "P8",
+    "T8",
+    "FC6",
+    "F4",
+    "F8",
+    "AF4",
+]
+INSIGHT5_CHANNELS = ["AF3", "AF4", "T7", "T8", "Pz"]
+
+# Choose a standard montage that includes AF3/AF4/T7/T8/Pz, etc.
+# "standard_1020" works for these; you can also try "standard_1005" for denser sets.
+STANDARD_1020 = mne.channels.make_standard_montage("standard_1020").get_positions()[
+    "ch_pos"
+]
+
+INSIGHT5_CHANNEL_POSITIONS = torch.tensor(STANDARD_1020[ch] for ch in INSIGHT5_CHANNELS)
+EPOC14_CHANNEL_POSITIONS = torch.tensor(STANDARD_1020[ch] for ch in EPOC14_CHANNELS)
+
 
 def physionet_64_montage():
     dense = mne.channels.make_standard_montage("standard_1005")
@@ -99,6 +128,11 @@ def physionet_64_montage():
     )
 
     return mont_physio
+
+
+PHYSIONET_64_CHANNEL_POSITIONS = torch.tensor(
+    list(physionet_64_montage().get_positions()["ch_pos"].values())
+)
 
 
 # ---------- helper -----------------------------------------------------------
