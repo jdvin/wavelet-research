@@ -60,8 +60,6 @@ ds_split_configs:
     data_source: emotive_alpha
     headset: emotiv_insight_5
     epoch_length: 128
-
-
 num_epochs: 15
 batch_size: 32
 train_micro_batch_size: 8

@@ -28,6 +28,8 @@ from utils.electrode_utils import (
     INSIGHT5_CHANNELS,
     INSIGHT5_CHANNEL_POSITIONS,
     PHYSIONET_64_CHANNEL_POSITIONS,
+    ChannelMaskConfig,
+    create_mask,
 )
 
 
@@ -295,17 +297,11 @@ def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
     window = torch.hann_window(n_fft)
     signal = (signal - signal.mean()) / torch.sqrt(signal.var() + 1e-7)
     stft = torch.stft(signal, n_fft, hop_length, window=window, return_complex=True)
-    # Freq 0 is not needed because the signal is normalized.
+    # Freq 0 is not needed because the signal zero-centered.
     return stft[:, 1:, :-1].abs() ** 2
 
 
-def get_nth_mask(size: int, n: int, offset: int = 1) -> torch.Tensor:
-    mask = torch.ones(size)
-    mask[offset - 1 :: n] = False
-    return mask.unsqueeze(0).unsqueeze(-1)
-
-
-def eeg_mmi_collate_fn(
+def mapped_label_ds_collate_fn(
     samples: list[tuple[torch.Tensor, int, np.memmap, int]],
 ) -> dict[str, torch.Tensor]:
     channel_positons, tasks, channel_signals, labels = [], [], [], []
@@ -590,15 +586,23 @@ class DataSplit:
 
     source_base_path: str
     output_path: str
-
-    sensor_mask: list[int] | None
     epoch_length: int | None = None
+    channel_mask_config: ChannelMaskConfig | None = None
+    channel_mask: list[int] | None = None
 
     def __post_init__(self) -> None:
-        if type(self.data_source) is str:
+        if isinstance(self.data_source, str):
             self.data_source = DataSource(self.data_source)
-        if type(self.headset) is str:
+        if isinstance(self.headset, str):
             self.headset = Headset(self.headset)
+
+        if self.channel_mask_config is not None and isinstance(
+            self.channel_mask_config, dict
+        ):
+            self.channel_mask_config = ChannelMaskConfig(**self.channel_mask_config)
+
+        assert max(self.subjects) < self.max_subjects
+        assert max(self.sessions) < self.max_sessions
 
     def code(self) -> str:
         # Hack bc subjects and sessions are 1-indexed.
@@ -607,6 +611,16 @@ class DataSplit:
         sessions_onehot = np.zeros(self.max_sessions + 1, dtype=int)
         sessions_onehot[self.sessions] = 1
         return f"ds-{self.data_source.value}_hs-{self.headset.value}_sub-{''.join(str(s) for s in subjects_onehot.tolist())}_sess-{''.join(str(s) for s in sessions_onehot.tolist())}"
+
+    def __repr__(self) -> str:
+        return f"""DataSplit(
+    split_name={self.split_name},
+    subjects={self.subjects},
+    sessions={self.sessions},
+    data_source={self.data_source},
+    headset={self.headset},
+)
+"""
 
 
 @dataclass
@@ -1011,6 +1025,18 @@ def extract_emotiv_alpha_suppression_split(
     )
 
 
+def ds_split_factory(splits: list[dict[str, Any]]):
+    out = []
+    for split in splits:
+        if split["data_source"] == DataSource.EEG_MMI:
+            out.append(EEGMMIDataSplit(**split))
+        elif split["data_source"] == DataSource.EMOTIVE_ALPHA:
+            out.append(EmotivAlphaDataSplit(**split))
+        else:
+            raise NotImplementedError(f"Unknown data source: {split['data_source']}")
+    return out
+
+
 def get_multi_mapped_label_datasets(
     splits: list[DataSplit],
     labels_map: dict[str, int],
@@ -1021,6 +1047,7 @@ def get_multi_mapped_label_datasets(
     for split in splits:
         os.makedirs(split.output_path, exist_ok=True)
 
+        electrode_positions = None
         if split.headset == Headset.PHYSIONET_64:
             electrode_positions = PHYSIONET_64_CHANNEL_POSITIONS
         elif split.headset == Headset.EMOTIV_INSIGHT_5:
@@ -1029,6 +1056,13 @@ def get_multi_mapped_label_datasets(
             electrode_positions = EPOC14_CHANNEL_POSITIONS
         else:
             raise NotImplementedError(f"Unknown headset: {split.headset}")
+        assert electrode_positions is not None
+
+        channel_mask = None
+        if split.channel_mask_config is not None:
+            channel_mask = create_mask(
+                electrode_positions.numpy(), split.channel_mask_config
+            )
 
         if split.data_source == DataSource.EEG_MMI:
             assert isinstance(split, EEGMMIDataSplit)
@@ -1049,7 +1083,7 @@ def get_multi_mapped_label_datasets(
             labels_map,
             tasks_map,
             electrode_positions,
-            split.sensor_mask,
+            channel_mask,
         )
 
         ds = ret.get(split.split_name, None)

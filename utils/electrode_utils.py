@@ -197,14 +197,14 @@ class Montage:
     pos_array: np.ndarray
 
 
-class MaskType(Enum):
+class ChannelMaskType(Enum):
     REGION = "region"
     NTH = "nth"
 
 
 def get_nth_mask(size: int, n: int, offset: int = 1) -> np.ndarray:
     mask = np.ones(size)
-    mask[offset - 1 :: n] = False
+    mask[offset - 1 :: n] = 0
     return mask
 
 
@@ -237,16 +237,16 @@ def get_region_electrodes(
     return mask
 
 
-@dataclass
-class MaskConfig:
-    mask_type: MaskType
-    args: dict[str, Any]
+class ChannelMaskConfig:
+    def __init__(self, mask_type: str, args: dict[str, Any]):
+        self.mask_type = ChannelMaskType(mask_type)
+        self.args = args
 
 
-def create_mask(pos_array: np.ndarray, mask_config: MaskConfig) -> np.ndarray:
-    if mask_config.mask_type == MaskType.REGION:
+def create_mask(pos_array: np.ndarray, mask_config: ChannelMaskConfig) -> np.ndarray:
+    if mask_config.mask_type == ChannelMaskType.REGION:
         mask = ~get_region_electrodes(pos_array, mask_config.args["regions"])
-    elif mask_config.mask_type == MaskType.NTH:
+    elif mask_config.mask_type == ChannelMaskType.NTH:
         mask = get_nth_mask(
             pos_array.shape[0], mask_config.args["n"], mask_config.args["offset"]
         )

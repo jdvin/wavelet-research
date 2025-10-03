@@ -35,29 +35,29 @@ class MappedLabelDataset(Dataset):
         labels: np.memmap,
         labels_map: dict[str, int],
         tasks_map: dict[str, int],
-        sensor_positions: torch.Tensor,
-        sensor_mask: None | list[int] = None,
+        channel_positions: torch.Tensor,
+        channel_mask: None | list[int] | np.ndarray | torch.Tensor = None,
     ):
         self.labels_map = labels_map
         self.tasks_map = tasks_map
         self.inputs = inputs
         self.labels = labels
-        self.sensor_mask = sensor_mask
-        if sensor_mask is not None:
-            self.sensor_positions = sensor_positions[sensor_mask]
+        self.channel_mask = channel_mask
+        if channel_mask is not None:
+            self.channel_positions = channel_positions[channel_mask]
         else:
-            self.sensor_positions = sensor_positions
+            self.channel_positions = channel_positions
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int, np.ndarray, int]:
         input = self.inputs[index]
-        if self.sensor_mask is not None:
-            input = input[self.sensor_mask]
+        if self.channel_mask is not None:
+            input = input[self.channel_mask]
         task, label = self.labels[index, :]
         return (
-            self.sensor_positions,
+            self.channel_positions,
             self.tasks_map[task],
             input,
             self.labels_map[label],

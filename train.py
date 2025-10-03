@@ -16,17 +16,9 @@ from torch.amp.grad_scaler import GradScaler
 from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 from utils.data_utils import (
-    EEGMMIDataSplit,
-    EmotivAlphaDataSplit,
-    eeg_mmi_collate_fn,
-    get_eeg_mmi_dataset,
-    get_libri_brain_speech_dataset,
-    get_nth_mask,
-    libri_speech_brain_collate_fn,
-)
-from utils.electrode_utils import (
-    Region,
-    get_region_mask,
+    ds_split_factory,
+    mapped_label_ds_collate_fn,
+    get_multi_mapped_label_datasets,
 )
 
 from pytorch_memlab import MemReporter
@@ -115,64 +107,26 @@ def main(
     # reporter = MemReporter(model)
     if world_size > 1:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
-    logger.info(f"Loading dataset from {cfg.dataset_path}.")
+    ds_splits = ds_split_factory(cfg.ds_split_configs)
+    logger.info(f"Loading dataset splits: {ds_splits}.")
+
     # The first rank goes ahead to create the dataset if it does not already exist, before the other ranks then load it.
     # This is probably quite a strange pattern, but it is the simplest way to implement this behaviour.
     # TODO: Distributed dataset creation.
-
-    # fronto_occipital_electrodes = (
-    #     torch.tensor(
-    #         get_region_mask(
-    #             model.module.data_config.channel_positions.numpy(),
-    #             [Region.FRONTAL, Region.OCCIPITAL],
-    #         )
-    #     )
-    #     .unsqueeze(0)
-    #     .unsqueeze(-1)
-    # )
-    # temporo_parietal_electrodes = (
-    #     torch.tensor(
-    #         get_region_mask(
-    #             model.module.data_config.channel_positions.numpy(),
-    #             [Region.PARIETAL, Region.TEMPORAL],
-    #         )
-    #     )
-    #     .unsqueeze(0)
-    #     .unsqueeze(-1)
-    # )
-    # train_mask = get_nth_mask(model.module.data_config.max_channels, 2, 1)
-    # val_mask = get_nth_mask(model.module.data_config.max_channels, 2, 2)
-    eeg_mmi_getter = partial(
-        get_eeg_mmi_dataset,
-        source_base_path=cfg.dataset_path,
-        output_path="data/eeg_mmi",
-        splits=splits,
-        labels_map={"base_e_open": 0, "base_e_clos": 1},
-        tasks_map={"m_eyes_open": 0, "m_eyes_clos": 0},
-        reset_cache=reset_data_cache,
-        sensor_mask=None,
-    )
     if is_main_process:
-        ds = ds_getter()
-        ds = {
-            "train": ds["train"],
-            "eyes_val": ds["eyes_val"],
-        }
+        ds = get_multi_mapped_label_datasets(
+            ds_splits, cfg.ds_labels_map, cfg.ds_tasks_map
+        )
 
         if world_size > 1:
             dist.barrier()
     else:
         dist.barrier()
-        ds = ds_getter()
-        ds = {
-            "train": ds["train"],
-            "eyes_val": ds["eyes_val"],
-        }
+        ds = get_multi_mapped_label_datasets(
+            ds_splits, cfg.ds_labels_map, cfg.ds_tasks_map
+        )
 
     logger.info("Creating data loaders.")
-
-    train_collate_fn = eeg_mmi_collate_fn
-    val_collate_fn = eeg_mmi_collate_fn
 
     # Create data loaders.
     (
@@ -186,8 +140,8 @@ def main(
         cfg.val_micro_batch_size,
         rank,
         world_size,
-        train_collate_fn,
-        val_collate_fn,
+        mapped_label_ds_collate_fn,
+        mapped_label_ds_collate_fn,
     )
     # Steps per epoch is the number of batches in the training set.
     steps_per_epoch = math.ceil(len(train_dataloader) / grad_accum_steps)
