@@ -594,6 +594,12 @@ class DataSplit:
     sensor_mask: list[int] | None
     epoch_length: int | None = None
 
+    def __post_init__(self) -> None:
+        if type(self.data_source) is str:
+            self.data_source = DataSource(self.data_source)
+        if type(self.headset) is str:
+            self.headset = Headset(self.headset)
+
     def code(self) -> str:
         # Hack bc subjects and sessions are 1-indexed.
         subjects_onehot = np.zeros(self.max_subjects + 1, dtype=int)
@@ -617,11 +623,10 @@ class EmotivAlphaDataSplit(DataSplit):
 
 
 class EEGMMIDataSplit(DataSplit):
-    sessions: list[int]
-    max_subjects: int = 109
-    max_sessions: int = 14
-    data_source: DataSource = DataSource.EEG_MMI
-    headset: Headset = Headset.PHYSIONET_64
+    max_subjects: int = field(init=False, default=109)
+    max_sessions: int = field(init=False, default=14)
+    data_source: DataSource = field(init=False, default=DataSource.EEG_MMI)
+    headset: Headset = field(init=False, default=Headset.PHYSIONET_64)
 
 
 def extract_eeg_mmi_session_data(
@@ -724,7 +729,9 @@ def extract_eeg_mmi_split(
     reset_cache: bool = False,
 ):
     eeg_path = os.path.join(output_path, f"{split.split_name}_{split.code()}_eeg.npy")
-    labels_path = os.path.join(output_path, f"{split.split_name}_{split.code()}_labels.npy")
+    labels_path = os.path.join(
+        output_path, f"{split.split_name}_{split.code()}_labels.npy"
+    )
     if os.path.exists(eeg_path) and os.path.exists(labels_path) and not reset_cache:
         return np.load(eeg_path, mmap_mode="r", allow_pickle=True), np.load(
             labels_path, mmap_mode="r", allow_pickle=True
@@ -976,7 +983,9 @@ def extract_emotiv_alpha_suppression_split(
 
     channels = HEADSET_TO_CHANNELS.get(split.headset)
     if channels is None:
-        raise NotImplementedError(f"Unsupported headset for extraction: {split.headset}")
+        raise NotImplementedError(
+            f"Unsupported headset for extraction: {split.headset}"
+        )
 
     eeg_store = np.zeros(
         (total_epochs, len(channels), split.epoch_length), dtype=np.float32

@@ -151,7 +151,7 @@ class TrainingConfig:
     training_config_path: str
     model_config_path: str
     checkpoints: bool
-    dataset_path: str
+    ds_split_configs: list[dict[str, Any]]
     num_epochs: int
     batch_size: int
     train_micro_batch_size: int

@@ -4,6 +4,7 @@ import tempfile
 import os
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 import mne
 import requests, io, numpy as np
 from stl import mesh
@@ -196,7 +197,18 @@ class Montage:
     pos_array: np.ndarray
 
 
-def get_region_mask(
+class MaskType(Enum):
+    REGION = "region"
+    NTH = "nth"
+
+
+def get_nth_mask(size: int, n: int, offset: int = 1) -> np.ndarray:
+    mask = np.ones(size)
+    mask[offset - 1 :: n] = False
+    return mask
+
+
+def get_region_electrodes(
     electrode_positions: np.ndarray, regions: list[Region]
 ) -> np.ndarray:
     """Get a boolean mask for the specified regions"""
@@ -225,9 +237,28 @@ def get_region_mask(
     return mask
 
 
+@dataclass
+class MaskConfig:
+    mask_type: MaskType
+    args: dict[str, Any]
+
+
+def create_mask(pos_array: np.ndarray, mask_config: MaskConfig) -> np.ndarray:
+    if mask_config.mask_type == MaskType.REGION:
+        mask = ~get_region_electrodes(pos_array, mask_config.args["regions"])
+    elif mask_config.mask_type == MaskType.NTH:
+        mask = get_nth_mask(
+            pos_array.shape[0], mask_config.args["n"], mask_config.args["offset"]
+        )
+    else:
+        raise NotImplementedError(f"Unknown mask type: {mask_config.mask_type}")
+
+    return mask[np.newaxis, ..., np.newaxis]
+
+
 def mask_regions(montage: Montage, regions: list[Region]) -> Montage:
     """Mask the montage to only include the specified regions"""
-    mask = get_region_mask(montage.pos_array, regions)
+    mask = ~get_region_electrodes(montage.pos_array, regions)
     return Montage(
         str(regions),
         [name for m, name in zip(mask, montage.electrode_names) if m],

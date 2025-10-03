@@ -119,36 +119,6 @@ def main(
     # The first rank goes ahead to create the dataset if it does not already exist, before the other ranks then load it.
     # This is probably quite a strange pattern, but it is the simplest way to implement this behaviour.
     # TODO: Distributed dataset creation.
-    eeg_mmi_train_split = EEGMMIDataSplit(
-        base_path=...,
-        output_path=...,
-        split_name="train",
-        subjects=list(range(1, 100)),
-        sessions=[1, 2],
-        sensor_mask=None,
-    )
-    eeg_mmi_val_split = EEGMMIDataSplit(
-        base_path=...,
-        output_path=...,
-        split_name="eeg_mmi_eyes_val",
-        subjects=list(range(100, 110)),
-        sessions=[1, 2],
-        sensor_mask=None,
-    )
-    emotiv_alpha_train_split = EmotivAlphaDataSplit(
-        base_path=...,
-        output_path=...,
-        split_name="train",
-        subjects=list(set(range(1, 27)) - {6, 12, 27}),  # Lord forgive me.
-        sensor_mask=None,
-    )
-    emotive_alpha_val_split = EmotivAlphaDataSplit(
-        base_path=...,
-        output_path=...,
-        split_name="emotiv_alpha_eyes_val",
-        subjects=[6, 12, 27],
-        sensor_mask=None,
-    )
 
     # fronto_occipital_electrodes = (
     #     torch.tensor(
