@@ -106,6 +106,7 @@ class MultiHeadAttention(torch.nn.Module):
         xc: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
         attention_mask: Tensor | None = None,
+        seq_pos: Tensor | None = None,
     ) -> tuple[Tensor]:
         B, T_q, D = x.size()  # Batch size, sequence length, model dimension.
         T_kv = xc.size(1) if xc is not None else T_q
@@ -147,8 +148,13 @@ class MultiHeadAttention(torch.nn.Module):
             if bias is not None:
                 attention_mask = attention_mask + bias
         if self.rotary_embedding is not None:
-            q = self.rotary_embedding.rotate_queries_or_keys(q, offset=T_cached)
-            k = self.rotary_embedding.rotate_queries_or_keys(k)
+            if seq_pos is not None:
+                q, k = self.rotary_embedding.custom_seq_pos_rotate_queries_and_keys(
+                    q, k, seq_pos
+                )
+            else:
+                q = self.rotary_embedding.rotate_queries_or_keys(q, offset=T_cached)
+                k = self.rotary_embedding.rotate_queries_or_keys(k)
         y = self.qkv_attention(
             q,
             k,

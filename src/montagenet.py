@@ -197,7 +197,19 @@ def lcmN(*nums: int) -> int:
     return reduce(lcm2, nums, 1)
 
 
-class Embedder(nn.Module):
+class LinearEmbedder(nn.Module):
+    def __init__(
+        self,
+        data_config: DataConfig,
+        d_model: int,
+    ):
+        super().__init__()
+        lcm = lcmN(*[sr for sr in data_config.sampling_rates])
+        self.insertion_steps = {sr: lcm // sr for sr in data_configs.sampling_rates}
+        self.embed = nn.Linear(d_model, d_model)
+
+
+class ConvEmbedder(nn.Module):
     def __init__(
         self,
         data_config: DataConfig,
