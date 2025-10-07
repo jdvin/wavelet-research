@@ -43,7 +43,7 @@ from utils.metrics import (
     MetricManager,
 )
 
-from src.montagenet import MontageNetConfig, MontageNet, TaskConfig
+from src.montagenet import MontageNetConfig, MontageNet
 
 
 def main(
@@ -115,7 +115,7 @@ def main(
     # TODO: Distributed dataset creation.
     if is_main_process:
         ds = get_multi_mapped_label_datasets(
-            ds_splits, cfg.ds_labels_map, cfg.ds_tasks_map
+            ds_splits, cfg.ds_labels_map, cfg.ds_tasks_map, reset_data_cache
         )
 
         if world_size > 1:
@@ -123,7 +123,7 @@ def main(
     else:
         dist.barrier()
         ds = get_multi_mapped_label_datasets(
-            ds_splits, cfg.ds_labels_map, cfg.ds_tasks_map
+            ds_splits, cfg.ds_labels_map, cfg.ds_tasks_map, reset_data_cache
         )
 
     logger.info("Creating data loaders.")
