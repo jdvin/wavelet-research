@@ -187,95 +187,52 @@ class TaskConfig:
     n_classes: int
 
 
-def lcm2(a: int, b: int) -> int:
-    if a == 0 or b == 0:
-        return 0
-    return abs(a) // gcd(a, b) * abs(b)
+class ComplexMorletBank(nn.Module):
+    def __init__(self, d_model, f_lo, f_hi, K_sec):
+        super().__init__()
+        # Learn center freq and log-bandwidth per filter (Hz, seconds)
+        self.f_c = nn.Parameter(torch.linspace(f_lo, f_hi, d_model))
+        self.log_Q = nn.Parameter(torch.zeros(d_model))  # Q controls σ via bandwidth
+        self.K_sec = K_sec
+        self.d_model = d_model
+
+    def kernel_for_sr(self, sr: int, device="cpu"):
+        K = int(round(self.K_sec * sr)) | 1
+        t = (torch.arange(K, device=device) - K // 2) / sr  # seconds
+        f = F.softplus(self.f_c)  # >0 Hz
+        Q = torch.exp(self.log_Q) + 1.0  # >1
+        # bandwidth-to-sigma (approx; tweak as desired)
+        sigma = Q / (2 * torch.pi * f + 1e-8)  # seconds
+
+        # Complex Morlet: exp(j 2π f t) * exp(-t^2/(2σ^2)), zero-mean correction optional
+        # Real and Imag parts (two output channels per filter)
+        carrier = 2 * torch.pi * f[:, None] * t[None, :]
+        gauss = torch.exp(-0.5 * (t[None, :] / (sigma[:, None] + 1e-8)) ** 2)
+        k_r = torch.cos(carrier) * gauss  # (d_model, K)
+        k_i = torch.sin(carrier) * gauss  # (d_model, K)
+
+        # Window & normalize (optional; gauss already windows)
+        k_r = k_r / (k_r.norm(dim=-1, keepdim=True) + 1e-8)
+        k_i = k_i / (k_i.norm(dim=-1, keepdim=True) + 1e-8)
+
+        # Stack as 2*d_model real filters: [real; imag]
+        k = torch.stack([k_r, k_i], dim=1).reshape(2 * self.d_model, 1, K)
+        return k.contiguous()  # (2*d_model, 1, K)
 
 
-def lcmN(*nums: int) -> int:
-    return reduce(lcm2, nums, 1)
-
-
-class LinearEmbedder(nn.Module):
+class ContinuousSignalEmbedder(nn.Module):
     def __init__(
         self,
         data_config: DataConfig,
         d_model: int,
     ):
         super().__init__()
-        lcm = lcmN(*[sr for sr in data_config.sampling_rates])
-        self.insertion_steps = {sr: lcm // sr for sr in data_configs.sampling_rates}
-        self.embed = nn.Linear(d_model, d_model)
-
-
-class ConvEmbedder(nn.Module):
-    def __init__(
-        self,
-        data_config: DataConfig,
-        d_model: int,
-    ):
-        super().__init__()
-        lcm = lcmN(*[sr for sr in data_config.sampling_rates])
-        self.insertion_steps = {sr: lcm // sr for sr in data_configs.sampling_rates}
-        emb_kernel_size = int(lcm / data_config.f_min)
-        self.embed = nn.Conv1d(
-            in_channels=1,
-            out_channels=d_model,
-            kernel_size=emb_kernel_size,
-            stride=1,
-            padding="same",
+        self.kernel_bank = ComplexMorletBank(
+            d_model,
+            data_config.f_min,
+            data_config.max_sr // 2,
+            data_config.K_sec,
         )
-
-    def zeropad_and_stack(self, tensors: Iterable[Tensor], max_len: int):
-        """
-        Args:
-            tensors (tuple[torch.Tensor]): tuple of 1D tensors, e.g. (t1, t2, ...)
-        Returns:
-            torch.Tensor: 2D tensor of shape (len(tensors), max_len)
-        """
-        padded = [
-            F.pad(t, (0, max_len - t.size(0))) for t in tensors  # pad only on the right
-        ]
-        return torch.stack(padded)
-
-    def upsample_zerofill(self, x: Tensor, sr: int) -> tuple[Tensor, Tensor]:
-        IS = self.insertion_steps[sr]
-        y = torch.zeros(len(x) * IS, dtype=x.dtype, device=x.device)
-        y[::IS] = x
-        m = torch.zeros_like(y)
-        m[::IS] = 1
-        return y, m
-
-    def forward(self, x: dict[int, Tensor]) -> tuple[Tensor, Tensor]:
-        ## ! THIS IS GOING TO CREATE VERY BIG ACTIVATION MATRICES.
-        ## ASSUME ~5K LCM, THEN AT BF16 WERE RUNNING 10KB PER EXAMPLE SECOND.
-        ## ALTERNATIVE IS TO EMBED EACH SAMPLE WITH A LINEAR, CACULATE UPSAMPLED/INTERPOLATED SEQ POS'S
-        ## THEN PERFORM ROPE WITH THEM
-        ##
-        ## SKIPPING THE CONV THEREFORE SKIPPING THE NEED TO UPSAMPLE SIGNALS.
-
-        X, M = [], []
-        max_len = 0
-        # Upsample each tensor to a common sampling rate.
-        for sr, x_i in x.items():
-            max_len = max(max_len, len(x_i))
-            y, m = self.upsample_zerofill(x_i, sr)
-            X.append(y)
-            M.append(m)
-        X = torch.stack(X)
-        M = torch.stack(M)
-        # To be returned and used by RoPE modules.
-        # Zero padding this is fine because the embeddings will be zeroed anyway.
-        S = self.zeropad_and_stack(torch.nonzero(M, as_tuple=True), max_len)
-        # Embed the upsamples tensors.
-        X = self.embed(X)
-        # Select umasked embeddings (i.e., those that represent data from the original signal).
-        X_ = []
-        for x_, m_ in zip(X, M):
-            X_.append(x_[m_])
-        X = self.zeropad_and_stack(X_, max_len)
-        return X, S
 
 
 class SpatioTemporalPerceiverResampler(nn.Module):
