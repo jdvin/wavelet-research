@@ -15,7 +15,7 @@ import torch
 from torch.nn import functional as F
 from torch import Tensor
 from tqdm import tqdm
-from pnpl.datasets import LibriBrainPhoneme, LibriBrainSpeech
+from pnpl.datasets import LibriBrainSpeech
 
 from utils.torch_datasets import (
     LibriBrainSpeechDataset,
@@ -32,6 +32,7 @@ from utils.electrode_utils import (
     ChannelMaskConfig,
     create_mask,
 )
+from utils.train_utils import TrainingConfig, load_yaml
 
 
 class ValidationType(Enum):
@@ -613,9 +614,9 @@ class DataSplit:
     split_name: str
     subjects: list[int]
     sessions: list[int]
-    max_subjects: int
-    max_sessions: int
-    data_source: DataSource
+    max_subjects: int = field(init=False)
+    max_sessions: int = field(init=False)
+    data_source: DataSource = field(init=False)
     headset: Headset
 
     source_base_path: str
@@ -634,7 +635,6 @@ class DataSplit:
             self.channel_mask_config, dict
         ):
             self.channel_mask_config = ChannelMaskConfig(**self.channel_mask_config)
-
         assert max(self.subjects) < self.max_subjects
         assert max(self.sessions) < self.max_sessions
 
@@ -659,11 +659,12 @@ class DataSplit:
 
 @dataclass
 class EmotivAlphaDataSplit(DataSplit):
-    max_subjects: int = field(init=False, default=64)
-    max_sessions: int = field(init=False, default=1)
+    max_subjects: int = 64
+    max_sessions: int = 1
     data_source: DataSource = field(init=False, default=DataSource.EMOTIVE_ALPHA)
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         if not self.sessions:
             self.sessions = [1]
         if self.epoch_length is None:
@@ -671,10 +672,14 @@ class EmotivAlphaDataSplit(DataSplit):
 
 
 class EEGMMIDataSplit(DataSplit):
-    max_subjects: int = field(init=False, default=109)
-    max_sessions: int = field(init=False, default=14)
+    max_subjects: int = 109
+    max_sessions: int = 14
     data_source: DataSource = field(init=False, default=DataSource.EEG_MMI)
     headset: Headset = field(init=False, default=Headset.PHYSIONET_64)
+
+    def __post_init__(self) -> None:
+        breakpoint()
+        super().__post_init__()
 
 
 def extract_eeg_mmi_session_data(
@@ -1062,9 +1067,10 @@ def extract_emotiv_alpha_suppression_split(
 def ds_split_factory(splits: list[dict[str, Any]]):
     out = []
     for split in splits:
-        if split["data_source"] == DataSource.EEG_MMI:
+        data_source = DataSource(split["data_source"])
+        if data_source == DataSource.EEG_MMI:
             out.append(EEGMMIDataSplit(**split))
-        elif split["data_source"] == DataSource.EMOTIVE_ALPHA:
+        elif data_source == DataSource.EMOTIVE_ALPHA:
             out.append(EmotivAlphaDataSplit(**split))
         else:
             raise NotImplementedError(f"Unknown data source: {split['data_source']}")
@@ -1078,7 +1084,9 @@ def get_multi_mapped_label_datasets(
     reset_cache: bool = False,
 ):
     ret = {}
+    print(splits)
     for split in splits:
+        logger.info(f"Creating dataset for split: {split.split_name}")
         os.makedirs(split.output_path, exist_ok=True)
 
         electrode_positions = None
@@ -1091,26 +1099,29 @@ def get_multi_mapped_label_datasets(
         else:
             raise NotImplementedError(f"Unknown headset: {split.headset}")
         assert electrode_positions is not None
+        logger.info(f"Electrode positions: {electrode_positions}")
 
         channel_mask = None
         if split.channel_mask_config is not None:
+            logger.info(f"Creating channel mask: {split.channel_mask_config}")
             channel_mask = create_mask(
                 electrode_positions.numpy(), split.channel_mask_config
             )
 
         if split.data_source == DataSource.EEG_MMI:
+            logger.info("Extracting EEG MMI data.")
             assert isinstance(split, EEGMMIDataSplit)
             split_eeg, split_labels = extract_eeg_mmi_split(
                 split.source_base_path, split, split.output_path, reset_cache
             )
         elif split.data_source == DataSource.EMOTIVE_ALPHA:
+            logger.info("Extracting Emotiv Alpha data.")
             assert isinstance(split, EmotivAlphaDataSplit)
             split_eeg, split_labels = extract_emotiv_alpha_suppression_split(
                 split, reset_cache
             )
         else:
             raise NotImplementedError(f"Unknown data source: {split.data_source}")
-
         dataset = MappedLabelDataset(
             split_eeg,
             split_labels,
@@ -1204,3 +1215,31 @@ def libri_speech_brain_collate_fn(
         "labels": labels,
         "metadata": metadata,
     }
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Data processing standalone script.")
+    parser.add_argument("--training-config-path", type=str, required=True)
+
+    args = parser.parse_args()
+    cfg = TrainingConfig(
+        **load_yaml(args.training_config_path),
+        training_config_path=args.training_config_path,
+        model_config_path="",
+        world_size=1,
+        run_project="",
+        run_name="",
+        run_group="",
+        eval_first=False,
+        device="",
+        checkpoints=False,
+    )
+    ds_splits = ds_split_factory(cfg.ds_split_configs)
+    ds = get_multi_mapped_label_datasets(
+        ds_splits,
+        cfg.ds_labels_map,
+        cfg.ds_tasks_map,
+        reset_cache=True,
+    )
