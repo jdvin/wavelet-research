@@ -12,6 +12,7 @@ from loguru import logger
 import numpy as np
 import pandas as pd
 import torch
+from torch.nn import functional as F
 from torch import Tensor
 from tqdm import tqdm
 from pnpl.datasets import LibriBrainPhoneme, LibriBrainSpeech
@@ -302,22 +303,55 @@ def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
 
 
 def mapped_label_ds_collate_fn(
-    samples: list[tuple[torch.Tensor, int, np.memmap, int]],
+    ds_samples: list[dict[str, torch.Tensor | int | np.memmap]],
 ) -> dict[str, torch.Tensor]:
-    channel_positons, tasks, channel_signals, labels = [], [], [], []
-    for sample in samples:
-        channel_positons.append(sample[0])
-        tasks.append(sample[1])
-        channel_signals.append(sample[2])
-        labels.append(sample[3])
-    sensor_positons_tensor = torch.tensor(channel_positons)
-    tasks_tensor = torch.tensor(tasks)
+    channel_signals, channel_positons, channel_masks, samples_masks, tasks, labels = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
+    max_samples, max_channels = 0, 0
+    for ds_sample in ds_samples:
+        assert isinstance(ds_sample["channel_signals"], torch.Tensor)
+        if ds_sample["channel_signals"].shape[0] > max_channels:
+            max_channels = ds_sample["channel_signals"].shape[0]
+        if ds_sample["channel_signals"].shape[1] > max_samples:
+            max_samples = ds_sample["channel_signals"].shape[1]
+        channel_positons.append(ds_sample["channel_positions"])
+        tasks.append(ds_sample["tasks"])
+        labels.append(ds_sample["labels"])
+
+    for ds_sample in ds_samples:
+        cs = ds_sample["channel_signals"]
+        assert isinstance(cs, torch.Tensor)
+        channel_mask = F.pad(
+            torch.ones(cs.shape[0], dtype=torch.bool, device=cs.device),
+            (0, max_channels - cs.shape[0]),
+        )
+        samples_mask = F.pad(
+            torch.ones(cs.shape[1], dtype=torch.bool, device=cs.device),
+            (0, max_samples - cs.shape[1]),
+        )
+        cs = F.pad(cs, (0, max_samples - cs.shape[1], 0, max_channels - cs.shape[0]))
+        channel_signals.append(cs)
+        samples_masks.append(samples_mask)
+        channel_masks.append(channel_mask)
+
     channel_signals_tensor = torch.tensor(np.array(channel_signals))
+    channel_positons_tensor = torch.tensor(channel_positons)
+    channel_masks_tensor = torch.tensor(np.array(channel_masks))
+    samples_masks_tensor = torch.tensor(np.array(samples_masks))
+    tasks_tensor = torch.tensor(tasks)
     labels_tensor = torch.tensor(labels)
     return {
-        "channel_positions": sensor_positons_tensor,
-        "tasks": tasks_tensor,
         "channel_signals": channel_signals_tensor,
+        "channel_positions": channel_positons_tensor,
+        "channel_mask": channel_masks_tensor,
+        "samples_mask": samples_masks_tensor,
+        "tasks": tasks_tensor,
         "labels": labels_tensor,
     }
 

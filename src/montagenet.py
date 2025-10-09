@@ -136,29 +136,34 @@ class SpatioTemporalAttentionBlock(nn.Module):
         self,
         latents: Tensor,
         source: Tensor,
-        T_emb: int,
-        attention_mask: Tensor | None = None,
+        T: int,
+        spatial_attention_mask: Tensor | None = None,
+        temporal_attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ):
         latents = self.resampler_block(
             latents,
             source,
-            attention_mask=attention_mask,
+            attention_mask=spatial_attention_mask,
             kv_cache=kv_cache,
         )
         latents = rearrange(
             latents,
-            "(B T_emb) L D -> (B L) T_emb D",
-            T_emb=T_emb,
+            "(B T) L D -> (B L) T D",
+            T=T,
             L=self.n_latents,
             D=self.d_model,
         )
-        latents = self.temporal_attn_block(latents, kv_cache=kv_cache)
+        latents = self.temporal_attn_block(
+            latents,
+            kv_cache=kv_cache,
+            attention_mask=temporal_attention_mask,
+        )
         latents = rearrange(
             latents,
-            "(B L) T_emb D -> (B T_emb) L D",
+            "(B L) T D -> (B T) L D",
             L=self.n_latents,
-            T_emb=T_emb,
+            T=T,
             D=self.d_model,
         )
         return latents
@@ -179,6 +184,12 @@ class DataConfig:
     sampling_rates: list[int]
     # lowest frequency that the embedding should capture.
     f_min: int
+    # highest frequency that the embedding should capture.
+    f_max: int
+    kernel_sec: float
+
+    def __post_init__(self):
+        assert self.f_max // 2 < min(self.sampling_rates)
 
 
 @dataclass
@@ -195,8 +206,11 @@ class ComplexMorletBank(nn.Module):
         self.log_Q = nn.Parameter(torch.zeros(d_model))  # Q controls σ via bandwidth
         self.K_sec = K_sec
         self.d_model = d_model
+        self.kernel_banks = {}
 
     def kernel_for_sr(self, sr: int, device="cpu"):
+        if kb := self.kernel_banks.get(sr):
+            return kb
         K = int(round(self.K_sec * sr)) | 1
         t = (torch.arange(K, device=device) - K // 2) / sr  # seconds
         f = F.softplus(self.f_c)  # >0 Hz
@@ -217,7 +231,11 @@ class ComplexMorletBank(nn.Module):
 
         # Stack as 2*d_model real filters: [real; imag]
         k = torch.stack([k_r, k_i], dim=1).reshape(2 * self.d_model, 1, K)
-        return k.contiguous()  # (2*d_model, 1, K)
+        self.kernel_banks[sr] = k.contiguous()  # (2*d_model, 1, K)
+        return self.kernel_banks[sr]
+
+    def __getitem__(self, sr):
+        return self.kernel_for_sr(sr)
 
 
 class ContinuousSignalEmbedder(nn.Module):
@@ -227,12 +245,56 @@ class ContinuousSignalEmbedder(nn.Module):
         d_model: int,
     ):
         super().__init__()
-        self.kernel_bank = ComplexMorletBank(
+        self.data_config = data_config
+        self.kernel_bank_factory = ComplexMorletBank(
             d_model,
             data_config.f_min,
-            data_config.max_sr // 2,
-            data_config.K_sec,
+            data_config.f_max,
+            data_config.kernel_sec,
         )
+
+    def stack_grouped_conv(self, X, k_list):
+        """
+        X: Tensor of shape (BC, T) each channel is a signal from an electrode.
+        k_list: list of (d_model, 1, K_i)  (kernel bank per sample; centered)
+        returns: (BC, d_model, T_max)
+        """
+        BC = X.shape[0]
+        X = X.unsqueeze(0)  # (1, B, T_max)
+
+        K_max = max(k.size(-1) for k in k_list)
+        # center-pad every kernel bank to K_max
+        K_pad = []
+        for k in k_list:
+            Ki = k.size(-1)
+            left = (K_max - Ki) // 2
+            right = K_max - Ki - left
+            K_pad.append(F.pad(k, (left, right)))  # (d_model,1,K_max)
+        W = torch.cat(K_pad, dim=0)  # (BC*d_model,1,K_max)
+
+        # grouped conv: groups=BC, in_channels=BC, out_channels=BC*d_model
+        Y = F.conv1d(X, W, padding=K_max // 2, groups=BC)  # (1, BC*d_model, T_max)
+        Y = rearrange(Y, "1 (bc d) t -> bc d t", b=BC)  # (BC,d_model,T_max)
+        return Y
+
+    def forward(self, x: Tensor, indexes: list[int], srs: list[int], max_channels: int):
+        """
+        x: Input signal tensor of shape (BC, T) with channels folded into the batch dimension.
+        indexes: LongTensor of shape (B,) with the indexes of the signal in the
+            original batch dimension.
+        srs: LongTensor of shape (B,) with the sampling rates of the signals.
+        max_channels: Maximum number of channels for a sample in the microbatch.
+        """
+        kernel_banks_list = [self.kernel_bank_factory[sr] for sr in srs]
+        embs = self.stack_grouped_conv(x, kernel_banks_list)
+        E = []
+        for start, end in zip(indexes, indexes[1:] + [None]):
+            # Slice out embedding of all channels for this training example and pad up to max channels.
+            e = embs[start:end]
+            e = F.pad(e, (0, 0, 0, max_channels - e.shape[1]))
+            E.append(e)
+        # norms?
+        return torch.stack(E)
 
 
 class SpatioTemporalPerceiverResampler(nn.Module):
@@ -253,18 +315,12 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         self.n_latents = n_latents
         self.return_latents = return_latents
         self.query_latents = nn.Parameter(torch.randn(n_latents, d_model))
-        emb_kernel_size = int(data_config.max_sr / data_config.f_min)
-        emb_stride = int(data_config.max_sr / data_config.min_sr)
-        self.embed = nn.Conv1d(
-            in_channels=1,
-            out_channels=d_model,
-            kernel_size=emb_kernel_size,
-            stride=emb_stride,
-            padding="same",
+        rotary_embedding = RotaryEmbedding(dim=32, cache_max_seq_len=256)
+        self.embedder = ContinuousSignalEmbedder(
+            data_config,
+            d_model,
         )
         self.embed_positions = nn.Linear(3, d_model)
-        self.embed_l_out = lambda T: int((T - emb_kernel_size) / emb_stride + 1)
-        rotary_embedding = RotaryEmbedding(dim=32, cache_max_seq_len=256)
         self.blocks = nn.ModuleList(
             [
                 SpatioTemporalAttentionBlock(
@@ -284,65 +340,87 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         self,
         source: Tensor,
         channel_positions: Tensor,
-        attention_mask: Tensor | None = None,
-        kv_cache: dict[int, Tensor] | None = None,
+        channel_mask: Tensor | None = None,
+        samples_mask: Tensor | None = None,
     ) -> Tensor:
+        """
+        source: signals tensor of shape (batch, channels, time).
+        channel_positions: tensor of shape (batch, channels, 3) with the position of each channel in the signal.
+        channel_masks: boolean tensor of shape (batch, channels) with True for each channel that should be included in the embedding and spatial attention.
+        samples_mask: boolean tensor of shape (batch, samples) with True for each sample that should be included in the embedding.
+        """
+        if channel_mask is None:
+            channel_mask = torch.ones(
+                source.size(0), source.size(1), dtype=torch.bool, device=source.device
+            )
+
         B, C, T = source.shape
-        T_emb = T  # self.embed_l_out(T)
         pos_emb = repeat(
             self.embed_positions(channel_positions),
-            "B C D -> B C D T_emb",
+            "B C D -> B C D T",
             B=B,
-            T_emb=T_emb,
+            T=T,
             D=self.d_model,
         )
-        # chan_embed = repeat(
-        #     self.embed_channels.weight,
-        #     "C D -> B C D T_emb",
-        #     B=B,
-        #     C=C,
-        #     T_emb=T_emb,
-        #     D=self.d_model,
-        # )
+        # TODO: Is this slicing maneuver cheaper than just running the padded signals through the embedder?
+        # Could I write a custom kernel that recognises the channel mask and only computes the relevant channels?
+        signals = torch.stack(
+            [source[i, : channel_mask[i], :] for i in range(source.size(0))]
+        )
+
         source = rearrange(
-            self.embed(rearrange(source, "B C T -> (B C) 1 T")),
-            "(B C) D T_emb -> B C D T_emb",
+            self.embedder(signals),
+            "(B C) D T -> B C D T",
             B=B,
             C=C,
             D=self.d_model,
         )
-        source = rearrange(source + pos_emb, "B C D T_emb -> (B T_emb) C D")
-        # source = rearrange(source, "B C D T_emb -> (B T_emb) C D")
+        source = rearrange(source + pos_emb, "B C D T -> (B T) C D")
+        # source = rearrange(source, "B C D T -> (B T) C D")
         # Initialize query latents
         latents = repeat(
             self.query_latents,
-            "L D -> (B T_emb) L D",
+            "L D -> (B T) L D",
             B=B,
-            T_emb=T_emb,
+            T=T,
             D=self.d_model,
             L=self.n_latents,
         )
 
         for block in self.blocks:
-            latents = block(latents, source, T_emb, attention_mask=attention_mask)
+            latents = block(
+                latents,
+                source,
+                T,
+                spatial_attention_mask=channel_mask,
+                temporal_attention_mask=samples_mask,
+            )
 
         latents = rearrange(
             latents,
-            "(B T_emb) L D -> B T_emb (L D)",
+            "(B T) L D -> B T (L D)",
             B=B,
-            T_emb=T_emb,
+            T=T,
             D=self.d_model,
             L=self.n_latents,
         )
         if self.return_latents == ReturnLatents.MEAN_POOL:
-            # Mean pool across time.
-            return latents.mean(dim=1)  # Average across time dimension
+            # Mean pool across time, account for samples mask.
+            if samples_mask is not None:
+                mask_expanded = samples_mask.unsqueeze(-1)
+                masked_latents = latents * mask_expanded
+                summed = masked_latents.sum(dim=1)
+                counts = samples_mask.sum(dim=1, keepdim=True).clamp(min=1)
+                return summed / counts
+            else:
+                # No mask, simple mean pooling
+                return latents.mean(dim=1)
         elif self.return_latents == ReturnLatents.ALL:
             return latents
         elif self.return_latents == ReturnLatents.LAST:
             return latents[:, -1, :]
         elif self.return_latents == ReturnLatents.MIDDLE:
-            return latents[:, T_emb // 2, :]
+            return latents[:, T // 2, :]
         else:
             raise NotImplementedError(self.return_latents)
 
@@ -427,13 +505,24 @@ class MontageNet(nn.Module):
         )
 
     def forward(self, batch: dict[str, Tensor]):
-        channel_positions, task_keys, channel_signals, labels = (
-            batch["channel_positions"],
-            batch["tasks"],
+        (
+            channel_signals,
+            channel_positions,
+            channel_mask,
+            samples_mask,
+            task_keys,
+            labels,
+        ) = (
             batch["channel_signals"],
+            batch["channel_positions"],
+            batch["channel_mask"],
+            batch["samples_mask"],
+            batch["tasks"],
             batch["labels"],
         )
-        latents = self.encoder(channel_signals, channel_positions)
+        latents = self.encoder(
+            channel_signals, channel_positions, channel_mask, samples_mask
+        )
         losses, logits = [], []
         for (
             task_key,

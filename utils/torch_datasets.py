@@ -51,17 +51,17 @@ class MappedLabelDataset(Dataset):
     def __len__(self):
         return len(self.labels)
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, int, np.ndarray, int]:
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor | int | np.ndarray]:
         input = self.inputs[index]
         if self.channel_mask is not None:
             input = input[self.channel_mask]
         task, label = self.labels[index, :]
-        return (
-            self.channel_positions,
-            self.tasks_map[task],
-            input,
-            self.labels_map[label],
-        )
+        return {
+            "channel_signals": input,
+            "channel_positions": self.channel_positions,
+            "tasks": self.tasks_map[task],
+            "labels": self.labels_map[label],
+        }
 
 
 class MultiMappedLabelDataset(Dataset):
