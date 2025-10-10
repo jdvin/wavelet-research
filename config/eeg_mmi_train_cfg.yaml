@@ -7,8 +7,8 @@ ds_tasks_map:
     move_eyes_clos: 0
 ds_split_configs:
   - split_name: train
-    source_base_path: "/teamspace/gs_connections/neural-decode-data/eeg-motor-movement-imagery"
-    output_path: "/data/eeg_mmi"
+    source_base_path: "/teamspace/gcs_connections/neural-decode-data/eeg-motor-movement-imagery"
+    output_path: "./data/eeg_mmi"
     subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
     sessions: [1, 2]
     channel_mask: None
@@ -16,8 +16,8 @@ ds_split_configs:
     headset: physionet_64
     epoch_length: 180
   - split_name: eeg_mmi_eyes_val
-    source_base_path: "/teamspace/gs_connections/neural-decode-data/eeg-motor-movement-imagery"
-    output_path: "/data/eeg_mmi"
+    source_base_path: "/teamspace/gcs_connections/neural-decode-data/eeg-motor-movement-imagery"
+    output_path: "./data/eeg_mmi"
     subjects: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
     sessions: [1, 2]
     channel_mask: None
@@ -25,26 +25,26 @@ ds_split_configs:
     headset: physionet_64
     epoch_length: 180
   - split_name: train
-    source_base_path: "/teamspace/gs_connections/neural-decode-data/emotiv-alpha-crowd/epoch"
-    output_path: "/data/emotiv_alpha"
+    source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/epoc"
+    output_path: "./data/emotiv_alpha"
     subjects: [2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13]
     sessions: [1]
     channel_mask: None
     data_source: emotive_alpha
-    headset: emotiv_epoch_14
+    headset: emotiv_epoc_14
     epoch_length: 128
   - split_name: emotiv_alpha_eyes_val
-    source_base_path: "/teamspace/gs_connections/neural-decode-data/emotiv-alpha-crowd/epoch"
-    output_path: "/data/emotiv_alpha"
+    source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/epoc"
+    output_path: "./data/emotiv_alpha"
     subjects: [1,7]
     sessions: [1]
     channel_mask: None
     data_source: emotive_alpha
-    headset: emotiv_epoch_14
+    headset: emotiv_epoc_14
     epoch_length: 128
   - split_name: train
-    source_base_path: "/teamspace/gs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
-    output_path: "/data/emotiv_alpha"
+    source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
+    output_path: "./data/emotiv_alpha"
     subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     sessions: [1]
     channel_mask: None
@@ -52,8 +52,8 @@ ds_split_configs:
     headset: emotiv_insight_5
     epoch_length: 128
   - split_name: emotiv_alpha_eyes_val
-    source_base_path: "/teamspace/gs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
-    output_path: "/data/emotiv_alpha"
+    source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
+    output_path: "./data/emotiv_alpha"
     subjects: [12,13,14]
     sessions: [1]
     channel_mask: None

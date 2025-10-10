@@ -614,13 +614,12 @@ class DataSplit:
     split_name: str
     subjects: list[int]
     sessions: list[int]
-    max_subjects: int = field(init=False)
-    max_sessions: int = field(init=False)
-    data_source: DataSource = field(init=False)
-    headset: Headset
-
     source_base_path: str
     output_path: str
+    headset: Headset
+    data_source: DataSource
+    max_subjects: int = 0
+    max_sessions: int = 0
     epoch_length: int | None = None
     channel_mask_config: ChannelMaskConfig | None = None
     channel_mask: list[int] | None = None
@@ -635,8 +634,8 @@ class DataSplit:
             self.channel_mask_config, dict
         ):
             self.channel_mask_config = ChannelMaskConfig(**self.channel_mask_config)
-        assert max(self.subjects) < self.max_subjects
-        assert max(self.sessions) < self.max_sessions
+        assert max(self.subjects) <= self.max_subjects
+        assert max(self.sessions) <= self.max_sessions
 
     def code(self) -> str:
         # Hack bc subjects and sessions are 1-indexed.
@@ -644,9 +643,9 @@ class DataSplit:
         subjects_onehot[self.subjects] = 1
         sessions_onehot = np.zeros(self.max_sessions + 1, dtype=int)
         sessions_onehot[self.sessions] = 1
-        return f"ds-{self.data_source.value}_hs-{self.headset.value}_sub-{''.join(str(s) for s in subjects_onehot.tolist())}_sess-{''.join(str(s) for s in sessions_onehot.tolist())}"
+        return f"ds-{self.data_source.value}--hs-{self.headset.value}--sub-{''.join(str(s) for s in subjects_onehot.tolist())}--sess-{''.join(str(s) for s in sessions_onehot.tolist())}"
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         return f"""DataSplit(
     split_name={self.split_name},
     subjects={self.subjects},
@@ -659,9 +658,8 @@ class DataSplit:
 
 @dataclass
 class EmotivAlphaDataSplit(DataSplit):
-    max_subjects: int = 64
+    data_source: DataSource = DataSource.EMOTIVE_ALPHA
     max_sessions: int = 1
-    data_source: DataSource = field(init=False, default=DataSource.EMOTIVE_ALPHA)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -671,15 +669,29 @@ class EmotivAlphaDataSplit(DataSplit):
             self.epoch_length = 128
 
 
+@dataclass
+class EmotivAlphaInsightDataSplit(EmotivAlphaDataSplit):
+    max_subjects: int = 14
+    headset: Headset = Headset.EMOTIV_INSIGHT_5
+
+
+@dataclass
+class EmotivAlphaEpocDataSplit(EmotivAlphaDataSplit):
+    max_subjects: int = 13
+    headset: Headset = Headset.EMOTIV_EPOC_14
+
+
+@dataclass
 class EEGMMIDataSplit(DataSplit):
+    data_source: DataSource = DataSource.EEG_MMI
+    headset: Headset = Headset.PHYSIONET_64
     max_subjects: int = 109
     max_sessions: int = 14
-    data_source: DataSource = field(init=False, default=DataSource.EEG_MMI)
-    headset: Headset = field(init=False, default=Headset.PHYSIONET_64)
 
     def __post_init__(self) -> None:
-        breakpoint()
         super().__post_init__()
+        assert self.headset == Headset.PHYSIONET_64
+        assert self.data_source == DataSource.EEG_MMI
 
 
 def extract_eeg_mmi_session_data(
@@ -1068,12 +1080,18 @@ def ds_split_factory(splits: list[dict[str, Any]]):
     out = []
     for split in splits:
         data_source = DataSource(split["data_source"])
+        headset = Headset(split["headset"])
         if data_source == DataSource.EEG_MMI:
             out.append(EEGMMIDataSplit(**split))
         elif data_source == DataSource.EMOTIVE_ALPHA:
-            out.append(EmotivAlphaDataSplit(**split))
+            if headset == Headset.EMOTIV_EPOC_14:
+                out.append(EmotivAlphaEpocDataSplit(**split))
+            elif headset == Headset.EMOTIV_INSIGHT_5:
+                out.append(EmotivAlphaInsightDataSplit(**split))
+            else:
+                raise NotImplementedError(f"Unknown headset: {headset}")
         else:
-            raise NotImplementedError(f"Unknown data source: {split['data_source']}")
+            raise NotImplementedError(f"Unknown data source: {data_source}")
     return out
 
 
@@ -1084,7 +1102,6 @@ def get_multi_mapped_label_datasets(
     reset_cache: bool = False,
 ):
     ret = {}
-    print(splits)
     for split in splits:
         logger.info(f"Creating dataset for split: {split.split_name}")
         os.makedirs(split.output_path, exist_ok=True)
@@ -1099,7 +1116,7 @@ def get_multi_mapped_label_datasets(
         else:
             raise NotImplementedError(f"Unknown headset: {split.headset}")
         assert electrode_positions is not None
-        logger.info(f"Electrode positions: {electrode_positions}")
+        logger.info(f"Got electrode positions for headset: {split.headset}.")
 
         channel_mask = None
         if split.channel_mask_config is not None:
