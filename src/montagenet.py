@@ -192,6 +192,16 @@ class DataConfig:
         assert self.f_max // 2 < min(self.sampling_rates)
 
 
+def lcm2(a: int, b: int) -> int:
+    if a == 0 or b == 0:
+        return 0
+    return abs(a) // gcd(a, b) * abs(b)
+
+
+def lcmN(*nums: int) -> int:
+    return reduce(lcm2, nums, 1)
+
+
 @dataclass
 class TaskConfig:
     key: str
