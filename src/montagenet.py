@@ -137,6 +137,7 @@ class SpatioTemporalAttentionBlock(nn.Module):
         latents: Tensor,
         source: Tensor,
         T: int,
+        seq_pos: Tensor | None = None,
         spatial_attention_mask: Tensor | None = None,
         temporal_attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
@@ -158,6 +159,7 @@ class SpatioTemporalAttentionBlock(nn.Module):
             latents,
             kv_cache=kv_cache,
             attention_mask=temporal_attention_mask,
+            seq_pos=seq_pos,
         )
         latents = rearrange(
             latents,
@@ -187,6 +189,7 @@ class DataConfig:
     # highest frequency that the embedding should capture.
     f_max: int
     kernel_sec: float
+    sequence_lenght_seconds: float
 
     def __post_init__(self):
         assert self.f_max // 2 < min(self.sampling_rates)
@@ -209,12 +212,14 @@ class TaskConfig:
 
 
 class ComplexMorletBank(nn.Module):
-    def __init__(self, d_model, f_lo, f_hi, K_sec):
+    def __init__(self, data_config: DataConfig, d_model: int):
         super().__init__()
         # Learn center freq and log-bandwidth per filter (Hz, seconds)
-        self.f_c = nn.Parameter(torch.linspace(f_lo, f_hi, d_model))
+        self.f_c = nn.Parameter(
+            torch.linspace(data_config.f_min, data_config.f_max, d_model)
+        )
         self.log_Q = nn.Parameter(torch.zeros(d_model))  # Q controls σ via bandwidth
-        self.K_sec = K_sec
+        self.K_sec = data_config.kernel_sec
         self.d_model = d_model
         self.kernel_banks = {}
 
@@ -256,12 +261,16 @@ class ContinuousSignalEmbedder(nn.Module):
     ):
         super().__init__()
         self.data_config = data_config
-        self.kernel_bank_factory = ComplexMorletBank(
-            d_model,
-            data_config.f_min,
-            data_config.f_max,
-            data_config.kernel_sec,
-        )
+        self.kernel_bank_factory = ComplexMorletBank(data_config, d_model)
+        self.sr_lcm = lcmN(*data_config.sampling_rates)
+        self.sr_seq_positions = {
+            sr: torch.linspace(
+                0,
+                int(data_config.sequence_lenght_seconds * self.sr_lcm),
+                self.sr_lcm // sr,
+            )
+            for sr in data_config.sampling_rates
+        }
 
     def stack_grouped_conv(self, X, k_list):
         """
@@ -287,7 +296,9 @@ class ContinuousSignalEmbedder(nn.Module):
         Y = rearrange(Y, "1 (bc d) t -> bc d t", b=BC)  # (BC,d_model,T_max)
         return Y
 
-    def forward(self, x: Tensor, indexes: list[int], srs: list[int], max_channels: int):
+    def forward(
+        self, x: Tensor, indexes: list[int], srs: list[int], max_channels: int
+    ) -> tuple[Tensor, Tensor]:
         """
         x: Input signal tensor of shape (BC, T) with channels folded into the batch dimension.
         indexes: LongTensor of shape (B,) with the indexes of the signal in the
@@ -295,7 +306,9 @@ class ContinuousSignalEmbedder(nn.Module):
         srs: LongTensor of shape (B,) with the sampling rates of the signals.
         max_channels: Maximum number of channels for a sample in the microbatch.
         """
-        kernel_banks_list = [self.kernel_bank_factory[sr] for sr in srs]
+        kernel_banks_list, seq_positions = zip(
+            *[(self.kernel_bank_factory[sr], self.sr_seq_positions[sr]) for sr in srs]
+        )
         embs = self.stack_grouped_conv(x, kernel_banks_list)
         E = []
         for start, end in zip(indexes, indexes[1:] + [None]):
@@ -304,7 +317,7 @@ class ContinuousSignalEmbedder(nn.Module):
             e = F.pad(e, (0, 0, 0, max_channels - e.shape[1]))
             E.append(e)
         # norms?
-        return torch.stack(E)
+        return torch.stack(E), torch.stack(seq_positions).to(x.device)
 
 
 class SpatioTemporalPerceiverResampler(nn.Module):
@@ -377,9 +390,9 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         signals = torch.stack(
             [source[i, : channel_mask[i], :] for i in range(source.size(0))]
         )
-
+        embeddings, seq_positions = self.embedder(signals)
         source = rearrange(
-            self.embedder(signals),
+            embeddings,
             "(B C) D T -> B C D T",
             B=B,
             C=C,
@@ -402,6 +415,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
                 latents,
                 source,
                 T,
+                seq_pos=seq_positions,
                 spatial_attention_mask=channel_mask,
                 temporal_attention_mask=samples_mask,
             )
