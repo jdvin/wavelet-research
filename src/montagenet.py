@@ -7,11 +7,10 @@ from torch import einsum as einsum
 import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
-from rotary_embedding_torch import RotaryEmbedding
 from einops import rearrange, repeat
 from math import gcd
 from functools import reduce
-
+from src.components.rope import RotaryEmbedding
 from src.components.focal_loss import FocalLoss
 from src.components.norm import RMSNorm
 from src.components.attention import MultiHeadAttention
@@ -48,9 +47,16 @@ class TemporalAttentionBlock(nn.Module):
     def forward(
         self,
         x: Tensor,
+        attention_mask: Tensor | None = None,
+        seq_pos: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
-        x = x + self.self_attn(self.attn_ln(x), kv_cache=kv_cache)
+        x = x + self.self_attn(
+            self.attn_ln(x),
+            attenton_mask=attention_mask,
+            seq_pos=seq_pos,
+            kv_cache=kv_cache,
+        )
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
@@ -189,7 +195,7 @@ class DataConfig:
     # highest frequency that the embedding should capture.
     f_max: int
     kernel_sec: float
-    sequence_lenght_seconds: float
+    sequence_length_seconds: float
 
     def __post_init__(self):
         assert self.f_max // 2 < min(self.sampling_rates)
@@ -271,6 +277,7 @@ class ContinuousSignalEmbedder(nn.Module):
             )
             for sr in data_config.sampling_rates
         }
+        self.out = nn.Linear(d_model, d_model)
 
     def stack_grouped_conv(self, X, k_list):
         """
@@ -306,6 +313,8 @@ class ContinuousSignalEmbedder(nn.Module):
         srs: LongTensor of shape (B,) with the sampling rates of the signals.
         max_channels: Maximum number of channels for a sample in the microbatch.
         """
+        B = len(indexes)
+        C = x.shape[0] / B
         kernel_banks_list, seq_positions = zip(
             *[(self.kernel_bank_factory[sr], self.sr_seq_positions[sr]) for sr in srs]
         )
@@ -316,8 +325,15 @@ class ContinuousSignalEmbedder(nn.Module):
             e = embs[start:end]
             e = F.pad(e, (0, 0, 0, max_channels - e.shape[1]))
             E.append(e)
-        # norms?
-        return torch.stack(E), torch.stack(seq_positions).to(x.device)
+        embs = rearrange(
+            torch.stack(E),
+            "B C D T -> B C T D",
+            B=B,
+            C=C,
+            D=self.d_model,
+        )
+
+        return self.out(embs), torch.stack(seq_positions).to(x.device)
 
 
 class SpatioTemporalPerceiverResampler(nn.Module):

@@ -1,30 +1,56 @@
 # freq_transformer_demo.py
+from math import gcd
+from functools import reduce
+
 from torch.cuda import is_available
 import math, numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 import matplotlib.pyplot as plt
 
+from src.components.rope import RotaryEmbedding
+from src.montagenet import DataConfig, TemporalAttentionBlock, ContinuousSignalEmbedder
+
 
 # ---------- 1) Synthetic dataset ----------
+
+
+def lcm2(a: int, b: int) -> int:
+    if a == 0 or b == 0:
+        return 0
+    return abs(a) // gcd(a, b) * abs(b)
+
+
+def lcmN(*nums: int) -> int:
+    return reduce(lcm2, nums, 1)
+
+
 class SineMixDataset(Dataset):
     def __init__(
         self,
         n_samples=2000,
-        seq_len=256,
+        seq_len_sec=1,
+        sampling_rates=[128, 180],
         fs=128,
         n_channels=8,
         low=(6, 10),
         high=(18, 22),
         snr_db=0,
     ):
-        self.seq_len, self.fs, self.n_channels = seq_len, fs, n_channels
-        t = np.arange(seq_len) / fs
-        X = np.zeros((n_samples, n_channels, seq_len), np.float32)
+        self.seq_len_sec, self.fs, self.n_channels = seq_len_sec, fs, n_channels
+        ts = [np.arange(int(sr * seq_len_sec)) for sr in sampling_rates]
+        max_len = max([len(t) for t in ts])
+        X = np.zeros((n_samples, n_channels, max_len), np.float32)
+        M = np.zeros((n_samples, max_len), np.int32)
+        lcm = lcmN(*sampling_rates)
+        S = np.arange(lcm)
         y = np.zeros((n_samples,), np.int64)
         rng = np.random.default_rng(0)
         for i in range(n_samples):
             cls = rng.integers(0, 2)
+            sr = rng.integers(len(sampling_rates))
+            t = ts[sr]
             y[i] = cls
+            M[i, : len(t)] = 1
             f = rng.uniform(*(low if cls == 0 else high))
             for c in range(n_channels):
                 phase = rng.uniform(0, 2 * np.pi)
@@ -32,85 +58,71 @@ class SineMixDataset(Dataset):
                 sig = amp * np.sin(2 * np.pi * f * t + phase)
                 sp = sig.var() + 1e-8
                 noise = rng.normal(0, np.sqrt(sp), size=t.shape)  # ~0 dB SNR
-                X[i, c] = (sig + noise).astype(np.float32)
-        # Per-channel standardization over the dataset
-        Xf = X.transpose(0, 2, 1).reshape(-1, n_channels)
-        m, s = Xf.mean(0, keepdims=True), Xf.std(0, keepdims=True) + 1e-6
-        X[:] = Xf.reshape(n_samples, seq_len, n_channels).transpose(0, 2, 1)
-        X = ((X.transpose(0, 2, 1) - m) / s).transpose(0, 2, 1).astype(np.float32)
-        self.X, self.y = X, y
+                X[i, c, 0 : len(sig)] = (sig + noise).astype(np.float32)
+        # Per-channel standardization over valid (masked) timesteps only
+        mask = M[:, None, :].astype(np.float32)
+        count = np.maximum(mask.sum(axis=(0, 2), keepdims=True), 1.0)
+        mean = (X * mask).sum(axis=(0, 2), keepdims=True) / count
+        var = (((X - mean) ** 2) * mask).sum(axis=(0, 2), keepdims=True) / count
+        std = np.sqrt(var) + 1e-6
+        X = ((X - mean) / std).astype(np.float32)
+        self.X, self.S, self.M, self.y = X, y, S, M
 
     def __len__(self):
         return len(self.y)
 
     def __getitem__(self, i):
-        return self.X[i], self.y[i]
-
-
-# ---------- 2) Positional encodings ----------
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len):
-        super().__init__()
-        pe = torch.zeros(max_len, d_model)
-        pos = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
-        )
-        pe[:, 0::2] = torch.sin(pos * div)
-        pe[:, 1::2] = torch.cos(pos * div)
-        self.register_buffer("pe", pe.unsqueeze(0))  # (1, T, D)
-
-    def forward(self, x):
-        return x + self.pe[:, : x.size(1), :]
+        return self.X[i], self.M[i], self.S, self.y[i]
 
 
 # ---------- 3) Tiny Transformer backbone ----------
-class TinyTransformer(nn.Module):
-    def __init__(
-        self, d_model=64, nhead=4, dim_ff=128, nlayers=2, seq_len=256, drop=0.1
-    ):
-        super().__init__()
-        layer = nn.TransformerEncoderLayer(
-            d_model, nhead, dim_ff, dropout=drop, batch_first=True, norm_first=True
-        )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=nlayers)
-        self.pos = PositionalEncoding(d_model, seq_len)
 
-    def forward(self, x):  # (B, T, D)
-        return self.encoder(self.pos(x))
+
+class Transformer(nn.Module):
+    def __init__(self, d_model=64, nhead=4, dim_ff=128, nlayers=2, drop=0.1):
+        super().__init__()
+        rotary_embedding = RotaryEmbedding(dim=32)
+        self.layers = nn.ModuleList(
+            [
+                TemporalAttentionBlock(d_model, nhead, dim_ff, rotary_embedding, drop)
+                for _ in range(nlayers)
+            ]
+        )
+
+    def forward(self, x, mask, seq_pos):  # (B, T, D)
+        return self.layers(x, mask, seq_pos)
 
 
 # ---------- 4) Two models ----------
 class ModelA_RawTransformer(nn.Module):
-    def __init__(self, C=8, D=64, seq_len=256, n_classes=2):
+    def __init__(self, data_config, d_model=64, n_classes=2):
         super().__init__()
-        self.inp = nn.Linear(C, D)
-        self.backbone = TinyTransformer(
-            D, nhead=4, dim_ff=128, nlayers=2, seq_len=seq_len
+        self.inp = nn.Linear(data_config.channel_counts[0], d_model)
+        self.backbone = Transformer(
+            d_model,
+            nhead=4,
+            dim_ff=128,
+            nlayers=2,
         )
-        self.cls = nn.Linear(D, n_classes)
+        self.cls = nn.Linear(d_model, n_classes)
 
-    def forward(self, x):  # x: (B, C, T)
+    def forward(self, x, mask, seq_pos):  # x: (B, C, T)
         x = x.transpose(1, 2)  # (B, T, C)
         x = self.inp(x)  # (B, T, D)
-        h = self.backbone(x)  # (B, T, D)
-        return self.cls(h.mean(1)), h
+        h = self.backbone(x, mask, seq_pos)  # (B, T, D)
+        last = mask.sum(dim=1) - 1
+        return self.cls(h[last]), h
 
 
 class ModelB_ConvThenTransformer(nn.Module):
-    def __init__(self, C=8, D=64, seq_len=256, n_classes=2):
+    def __init__(self, data_config, d_model, n_classes=2):
         super().__init__()
-        self.conv = nn.Conv1d(C, 32, kernel_size=9, padding=4)
-        self.bn = nn.BatchNorm1d(32)
-        self.proj = nn.Linear(32, D)
-        self.backbone = TinyTransformer(
-            D, nhead=4, dim_ff=128, nlayers=2, seq_len=seq_len
-        )
-        self.cls = nn.Linear(D, n_classes)
+        self.conv = ContinuousSignalEmbedder(data_config, 32)
+        self.backbone = Transformer(d_model, nhead=4, dim_ff=128, nlayers=1)
+        self.cls = nn.Linear(d_model, n_classes)
 
     def forward(self, x):  # x: (B, C, T)
-        z = F.gelu(self.bn(self.conv(x)))  # (B, 32, T)
-        z = self.proj(z.transpose(1, 2))  # (B, T, D)
+        z = self.conv(x)
         h = self.backbone(z)  # (B, T, D)
         return self.cls(h.mean(1)), h
 
@@ -178,7 +190,16 @@ if __name__ == "__main__":
     else:
         device = "cpu"
 
-    ds = SineMixDataset(n_samples=2000, seq_len=256, fs=128, n_channels=8, snr_db=0)
+    data_config = DataConfig(
+        channel_counts=[8],
+        sampling_rates=[128, 180],
+        f_min=6,
+        f_max=22,
+        kernel_sec=0.5,
+        sequence_length_seconds=1.0,
+    )
+
+    ds = SineMixDataset(n_samples=2000, fs=128, n_channels=8, snr_db=0)
     n_train = int(0.7 * len(ds))
     n_val = int(0.15 * len(ds))
     n_test = len(ds) - n_train - n_val
@@ -190,13 +211,13 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_set, batch_size=128, shuffle=False, num_workers=0)
 
     print("\nModel A: Raw Transformer")
-    modelA = ModelA_RawTransformer(C=8, D=64, seq_len=256)
+    modelA = ModelA_RawTransformer(data_config, d_model=64)
     a_tr, a_va, a_best = train(
         modelA, train_loader, val_loader, epochs=10, lr=1e-3, device=device
     )
 
     print("\nModel B: Conv → Transformer")
-    modelB = ModelB_ConvThenTransformer(C=8, D=64, seq_len=256)
+    modelB = ModelB_ConvThenTransformer(data_config, d_model=64)
     b_tr, b_va, b_best = train(
         modelB, train_loader, val_loader, epochs=10, lr=1e-3, device=device
     )
@@ -227,35 +248,35 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-    # ---------- 7) Attention map (Model A, layer 1, head 0) ----------
-    enc0 = modelA.backbone.encoder.layers[0]
-    with torch.no_grad():
-        for xb, yb in test_loader:
-            xb = xb.to(device)
-            # One high-freq example if available
-            mask = yb == 1
-            x1 = xb[mask][0:1] if mask.any() else xb[0:1]
-            # Tokens
-            tok = modelA.inp(x1.transpose(1, 2))  # (1,T,D)
-            tok = modelA.backbone.pos(tok)
-            y = enc0.norm1(tok)
-            out, attn = enc0.self_attn(
-                y, y, y, need_weights=True, average_attn_weights=False
-            )
-            attn = attn.squeeze(0)[0].detach().cpu().numpy()  # head 0, (T,T)
-            break
+    # # ---------- 7) Attention map (Model A, layer 1, head 0) ----------
+    # enc0 = modelA.backbone.encoder.layers[0]
+    # with torch.no_grad():
+    #     for xb, yb in test_loader:
+    #         xb = xb.to(device)
+    #         # One high-freq example if available
+    #         mask = yb == 1
+    #         x1 = xb[mask][0:1] if mask.any() else xb[0:1]
+    #         # Tokens
+    #         tok = modelA.inp(x1.transpose(1, 2))  # (1,T,D)
+    #         tok = modelA.backbone.pos(tok)
+    #         y = enc0.norm1(tok)
+    #         out, attn = enc0.self_attn(
+    #             y, y, y, need_weights=True, average_attn_weights=False
+    #         )
+    #         attn = attn.squeeze(0)[0].detach().cpu().numpy()  # head 0, (T,T)
+    # break
 
-    plt.figure()
-    plt.imshow(attn, aspect="auto", origin="lower", interpolation="nearest")
-    plt.title("Model A — Layer 1, Head 0 attention")
-    plt.xlabel("Key timestep")
-    plt.ylabel("Query timestep")
-    plt.colorbar()
-    plt.tight_layout()
-    plt.show()
+    # plt.figure()
+    # plt.imshow(attn, aspect="auto", origin="lower", interpolation="nearest")
+    # plt.title("Model A — Layer 1, Head 0 attention")
+    # plt.xlabel("Key timestep")
+    # plt.ylabel("Query timestep")
+    # plt.colorbar()
+    # plt.tight_layout()
+    # plt.show()
 
-    print("\nObservation:")
-    print("- You should see diagonal ‘bands’ at constant offsets in the attention map,")
-    print(
-        "  indicating the model has latched onto periodic structure (i.e., frequency)."
-    )
+    # print("\nObservation:")
+    # print("- You should see diagonal ‘bands’ at constant offsets in the attention map,")
+    # print(
+    #     "  indicating the model has latched onto periodic structure (i.e., frequency)."
+    # )
