@@ -53,7 +53,7 @@ class TemporalAttentionBlock(nn.Module):
     ) -> Tensor:
         x = x + self.self_attn(
             self.attn_ln(x),
-            attenton_mask=attention_mask,
+            attention_mask=attention_mask,
             seq_pos=seq_pos,
             kv_cache=kv_cache,
         )
@@ -222,23 +222,27 @@ class ComplexMorletBank(nn.Module):
         super().__init__()
         # Learn center freq and log-bandwidth per filter (Hz, seconds)
         self.f_c = nn.Parameter(
-            torch.linspace(data_config.f_min, data_config.f_max, d_model)
+            torch.linspace(data_config.f_min, data_config.f_max, d_model // 2)
         )
-        self.log_Q = nn.Parameter(torch.zeros(d_model))  # Q controls σ via bandwidth
+        self.log_Q = nn.Parameter(
+            torch.zeros(d_model // 2)
+        )  # Q controls σ via bandwidth
         self.K_sec = data_config.kernel_sec
-        self.d_model = d_model
         self.kernel_banks = {}
+        self.d_model = d_model
 
-    def kernel_for_sr(self, sr: int, device="cpu"):
-        if kb := self.kernel_banks.get(sr):
-            return kb
+    def kernel_for_sr(
+        self,
+        sr: int,
+    ):
+        if self.kernel_banks.get(sr) is not None:
+            return self.kernel_banks[sr]
         K = int(round(self.K_sec * sr)) | 1
-        t = (torch.arange(K, device=device) - K // 2) / sr  # seconds
+        t = (torch.arange(K, device=self.f_c.device) - K // 2) / sr  # seconds
         f = F.softplus(self.f_c)  # >0 Hz
         Q = torch.exp(self.log_Q) + 1.0  # >1
         # bandwidth-to-sigma (approx; tweak as desired)
         sigma = Q / (2 * torch.pi * f + 1e-8)  # seconds
-
         # Complex Morlet: exp(j 2π f t) * exp(-t^2/(2σ^2)), zero-mean correction optional
         # Real and Imag parts (two output channels per filter)
         carrier = 2 * torch.pi * f[:, None] * t[None, :]
@@ -251,7 +255,8 @@ class ComplexMorletBank(nn.Module):
         k_i = k_i / (k_i.norm(dim=-1, keepdim=True) + 1e-8)
 
         # Stack as 2*d_model real filters: [real; imag]
-        k = torch.stack([k_r, k_i], dim=1).reshape(2 * self.d_model, 1, K)
+        # TODO: reshape(2 * self.d_model, 1, K)???
+        k = torch.stack([k_r, k_i], dim=1).reshape(self.d_model, K)
         self.kernel_banks[sr] = k.contiguous()  # (2*d_model, 1, K)
         return self.kernel_banks[sr]
 
@@ -267,16 +272,10 @@ class ContinuousSignalEmbedder(nn.Module):
     ):
         super().__init__()
         self.data_config = data_config
+        assert d_model % 2 == 0
         self.kernel_bank_factory = ComplexMorletBank(data_config, d_model)
+        self.d_model = d_model
         self.sr_lcm = lcmN(*data_config.sampling_rates)
-        self.sr_seq_positions = {
-            sr: torch.linspace(
-                0,
-                int(data_config.sequence_lenght_seconds * self.sr_lcm),
-                self.sr_lcm // sr,
-            )
-            for sr in data_config.sampling_rates
-        }
         self.out = nn.Linear(d_model, d_model)
 
     def stack_grouped_conv(self, X, k_list):
@@ -284,10 +283,10 @@ class ContinuousSignalEmbedder(nn.Module):
         X: Tensor of shape (BC, T) each channel is a signal from an electrode.
         k_list: list of (d_model, 1, K_i)  (kernel bank per sample; centered)
         returns: (BC, d_model, T_max)
-        """
-        BC = X.shape[0]
-        X = X.unsqueeze(0)  # (1, B, T_max)
 
+        NB: C variable per example.
+        """
+        BC, T = X.shape
         K_max = max(k.size(-1) for k in k_list)
         # center-pad every kernel bank to K_max
         K_pad = []
@@ -296,15 +295,19 @@ class ContinuousSignalEmbedder(nn.Module):
             left = (K_max - Ki) // 2
             right = K_max - Ki - left
             K_pad.append(F.pad(k, (left, right)))  # (d_model,1,K_max)
-        W = torch.cat(K_pad, dim=0)  # (BC*d_model,1,K_max)
+        W = rearrange(
+            torch.cat(K_pad, dim=0), "BC D K -> (BC D) 1 K"  # (BC*d_model,1,K_max)
+        )
 
         # grouped conv: groups=BC, in_channels=BC, out_channels=BC*d_model
+        # Needs to be BC groups because we don't know C.
+        # Query: Is this more efficiennt than just padding each input to max channels and then folding into batch dimension and doing a normal conv?
         Y = F.conv1d(X, W, padding=K_max // 2, groups=BC)  # (1, BC*d_model, T_max)
-        Y = rearrange(Y, "1 (bc d) t -> bc d t", b=BC)  # (BC,d_model,T_max)
+        Y = rearrange(Y, "(BC D) T -> BC T D", BC=BC, D=self.d_model, T=Y.shape[-1])
         return Y
 
     def forward(
-        self, x: Tensor, indexes: list[int], srs: list[int], max_channels: int
+        self, x: Tensor, channel_counts: Tensor, srs: list[int], max_channels: int
     ) -> tuple[Tensor, Tensor]:
         """
         x: Input signal tensor of shape (BC, T) with channels folded into the batch dimension.
@@ -313,27 +316,22 @@ class ContinuousSignalEmbedder(nn.Module):
         srs: LongTensor of shape (B,) with the sampling rates of the signals.
         max_channels: Maximum number of channels for a sample in the microbatch.
         """
-        B = len(indexes)
-        C = x.shape[0] / B
-        kernel_banks_list, seq_positions = zip(
-            *[(self.kernel_bank_factory[sr], self.sr_seq_positions[sr]) for sr in srs]
-        )
+        indexes = [0] + channel_counts.cumsum(dim=0).tolist()[:-1]
+        # NEED ONE KERNEL PER CHANNEL
+        kernel_banks_list = [
+            self.kernel_bank_factory[sr].unsqueeze(0).expand(C, -1, -1)
+            for C, sr in zip(channel_counts, srs)
+        ]
+
         embs = self.stack_grouped_conv(x, kernel_banks_list)
         E = []
         for start, end in zip(indexes, indexes[1:] + [None]):
             # Slice out embedding of all channels for this training example and pad up to max channels.
             e = embs[start:end]
-            e = F.pad(e, (0, 0, 0, max_channels - e.shape[1]))
+            e = F.pad(e, (0, 0, 0, max_channels - e.shape[0]))
             E.append(e)
-        embs = rearrange(
-            torch.stack(E),
-            "B C D T -> B C T D",
-            B=B,
-            C=C,
-            D=self.d_model,
-        )
 
-        return self.out(embs), torch.stack(seq_positions).to(x.device)
+        return self.out(torch.stack(E))
 
 
 class SpatioTemporalPerceiverResampler(nn.Module):

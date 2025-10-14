@@ -2,10 +2,12 @@
 from math import gcd
 from functools import reduce
 
+from einops import rearrange
 from torch.cuda import is_available
 import math, numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from src.components.rope import RotaryEmbedding
 from src.montagenet import DataConfig, TemporalAttentionBlock, ContinuousSignalEmbedder
@@ -41,16 +43,20 @@ class SineMixDataset(Dataset):
         max_len = max([len(t) for t in ts])
         X = np.zeros((n_samples, n_channels, max_len), np.float32)
         M = np.zeros((n_samples, max_len), np.int32)
+        SR = np.zeros((n_samples,), np.int32)
         lcm = lcmN(*sampling_rates)
-        S = np.arange(lcm)
+        seq_positions = np.zeros((n_samples, max_len), np.int64)
         y = np.zeros((n_samples,), np.int64)
         rng = np.random.default_rng(0)
         for i in range(n_samples):
             cls = rng.integers(0, 2)
-            sr = rng.integers(len(sampling_rates))
-            t = ts[sr]
+            sr_i = rng.integers(len(sampling_rates))
+            sr = sampling_rates[sr_i]
+            t = ts[sr_i]
             y[i] = cls
             M[i, : len(t)] = 1
+            SR[i] = sr
+            seq_positions[i, : len(t)] = np.arange(0, int(lcm * seq_len_sec), lcm // sr)
             f = rng.uniform(*(low if cls == 0 else high))
             for c in range(n_channels):
                 phase = rng.uniform(0, 2 * np.pi)
@@ -66,13 +72,19 @@ class SineMixDataset(Dataset):
         var = (((X - mean) ** 2) * mask).sum(axis=(0, 2), keepdims=True) / count
         std = np.sqrt(var) + 1e-6
         X = ((X - mean) / std).astype(np.float32)
-        self.X, self.S, self.M, self.y = X, y, S, M
+        self.X, self.SR, self.L, self.M, self.y = X, SR, seq_positions, M, y
 
     def __len__(self):
         return len(self.y)
 
     def __getitem__(self, i):
-        return self.X[i], self.M[i], self.S, self.y[i]
+        return (
+            torch.tensor(self.X[i]),
+            torch.tensor(self.M[i], dtype=torch.bool),
+            torch.tensor(self.L[i]),
+            torch.tensor(self.SR[i]),
+            torch.tensor(self.y[i]),
+        )
 
 
 # ---------- 3) Tiny Transformer backbone ----------
@@ -81,7 +93,7 @@ class SineMixDataset(Dataset):
 class Transformer(nn.Module):
     def __init__(self, d_model=64, nhead=4, dim_ff=128, nlayers=2, drop=0.1):
         super().__init__()
-        rotary_embedding = RotaryEmbedding(dim=32)
+        rotary_embedding = RotaryEmbedding(dim=8)
         self.layers = nn.ModuleList(
             [
                 TemporalAttentionBlock(d_model, nhead, dim_ff, rotary_embedding, drop)
@@ -90,41 +102,74 @@ class Transformer(nn.Module):
         )
 
     def forward(self, x, mask, seq_pos):  # (B, T, D)
-        return self.layers(x, mask, seq_pos)
+        for layer in self.layers:
+            x = layer(x, mask, seq_pos)
+        return x
 
 
 # ---------- 4) Two models ----------
 class ModelA_RawTransformer(nn.Module):
     def __init__(self, data_config, d_model=64, n_classes=2):
         super().__init__()
-        self.inp = nn.Linear(data_config.channel_counts[0], d_model)
+        n_channels = data_config.channel_counts[0]
+        self.inp = nn.Linear(n_channels, d_model * n_channels)
         self.backbone = Transformer(
             d_model,
             nhead=4,
             dim_ff=128,
             nlayers=2,
         )
-        self.cls = nn.Linear(d_model, n_classes)
+        self.cls = nn.Linear(n_channels * d_model, n_classes)
 
-    def forward(self, x, mask, seq_pos):  # x: (B, C, T)
-        x = x.transpose(1, 2)  # (B, T, C)
-        x = self.inp(x)  # (B, T, D)
-        h = self.backbone(x, mask, seq_pos)  # (B, T, D)
-        last = mask.sum(dim=1) - 1
-        return self.cls(h[last]), h
+    def forward(self, x, sr, mask, seq_pos):
+        B, C, T = x.shape
+        last = (mask.sum(dim=1) - 1).clamp(min=0)
+        mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
+        seq_pos = seq_pos.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
+        x = x.transpose(1, 2)
+        x = self.inp(x)  # (B, T, DC)
+        h = self.backbone(
+            rearrange(x, "B T (D C) -> (B C) T D", B=B, T=T, C=C),
+            mask,
+            seq_pos,
+        )
+        h = rearrange(h, "(B C) T D -> B T (D C)", B=B, C=C, T=T)
+        idx = torch.arange(h.size(0), device=h.device)
+        last_hidden = h[idx, last]
+        return self.cls(last_hidden), h
 
 
 class ModelB_ConvThenTransformer(nn.Module):
     def __init__(self, data_config, d_model, n_classes=2):
         super().__init__()
-        self.conv = ContinuousSignalEmbedder(data_config, 32)
+        n_channels = data_config.channel_counts[0]
+        self.conv = ContinuousSignalEmbedder(data_config, d_model)
+        self.proj = nn.Linear(d_model, d_model)
         self.backbone = Transformer(d_model, nhead=4, dim_ff=128, nlayers=1)
-        self.cls = nn.Linear(d_model, n_classes)
+        self.cls = nn.Linear(d_model * n_channels, n_classes)
 
-    def forward(self, x):  # x: (B, C, T)
-        z = self.conv(x)
-        h = self.backbone(z)  # (B, T, D)
-        return self.cls(h.mean(1)), h
+    def forward(self, x, sr, mask, seq_pos):  # x: (B, C, T)
+        B, C, T = x.shape
+        last = (mask.sum(dim=1) - 1).clamp(min=0)
+        mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
+        seq_pos = seq_pos.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
+        channel_counts = torch.tensor([C] * B)
+        x = rearrange(x, "B C T -> (B C) T", B=B, C=C)
+        z = self.conv(
+            x,
+            channel_counts,
+            sr.tolist(),
+            max_channels=C,
+        )
+        h = self.backbone(
+            rearrange(z, "B C T D -> (B C) T D"),
+            mask,
+            seq_pos,
+        )  # (BC, T, D)
+        h = rearrange(h, "(B C) T D -> B T (D C)", B=B, C=C, T=T)
+        idx = torch.arange(B, device=h.device)
+        last_hidden = h[idx, last, :]
+        return self.cls(last_hidden), h
 
 
 # ---------- 5) Train / eval ----------
@@ -137,10 +182,16 @@ def train(model, train_loader, val_loader, epochs=8, lr=1e-3, device="cpu"):
     for ep in range(1, epochs + 1):
         model.train()
         run = 0.0
-        for xb, yb in train_loader:
-            xb, yb = xb.to(device), yb.to(device)
+        for xb, mb, lb, sb, yb in train_loader:
+            xb, mb, lb, sb, yb = (
+                xb.to(device),
+                mb.to(device),
+                lb.to(device),
+                sb.to(device),
+                yb.to(device),
+            )
             opt.zero_grad()
-            logits, _ = model(xb)
+            logits, _ = model(xb, sb, mb, lb)
             loss = crit(logits, yb)
             loss.backward()
             opt.step()
@@ -150,9 +201,15 @@ def train(model, train_loader, val_loader, epochs=8, lr=1e-3, device="cpu"):
         model.eval()
         corr = tot = 0
         with torch.no_grad():
-            for xb, yb in val_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                pred = model(xb)[0].argmax(1)
+            for xb, mb, lb, sb, yb in val_loader:
+                xb, mb, lb, sb, yb = (
+                    xb.to(device),
+                    mb.to(device),
+                    lb.to(device),
+                    sb.to(device),
+                    yb.to(device),
+                )
+                pred = model(xb, sb, mb, lb)[0].argmax(1)
                 corr += (pred == yb).sum().item()
                 tot += yb.size(0)
         val_acc = corr / tot
@@ -172,9 +229,9 @@ def accuracy(model, loader, device="cpu"):
     model.eval()
     corr = tot = 0
     with torch.no_grad():
-        for xb, yb in loader:
-            xb, yb = xb.to(device), yb.to(device)
-            corr += (model(xb)[0].argmax(1) == yb).sum().item()
+        for xb, mb, sb, yb in loader:
+            xb, mb, sb, yb = xb.to(device), mb.to(device), sb.to(device), yb.to(device)
+            corr += (model(xb, mb, sb)[0].argmax(1) == yb).sum().item()
             tot += yb.size(0)
     return corr / tot
 
@@ -199,7 +256,13 @@ if __name__ == "__main__":
         sequence_length_seconds=1.0,
     )
 
-    ds = SineMixDataset(n_samples=2000, fs=128, n_channels=8, snr_db=0)
+    ds = SineMixDataset(
+        seq_len_sec=int(data_config.sequence_length_seconds),
+        n_samples=2000,
+        fs=128,
+        n_channels=8,
+        snr_db=0,
+    )
     n_train = int(0.7 * len(ds))
     n_val = int(0.15 * len(ds))
     n_test = len(ds) - n_train - n_val

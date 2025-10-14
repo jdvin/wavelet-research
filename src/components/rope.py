@@ -71,7 +71,6 @@ def apply_rotary_emb(
     t_left = t[..., :start_index]
     t_middle = t[..., start_index:end_index]
     t_right = t[..., end_index:]
-
     # Apply rotary embeddings without modifying t in place
     t_transformed = (t_middle * freqs.cos() * scale) + (
         rotate_half(t_middle) * freqs.sin() * scale
@@ -337,7 +336,7 @@ class RotaryEmbedding(Module):
         return freqs
 
     def custom_seq_pos_rotate_queries_and_keys(self, q, k, seq_pos):
-        freqs = self.forward(seq_pos).unsqueeze(-2)
-        q_rot = apply_rotary_emb(freqs, q, seq_dim=1)
-        k_rot = apply_rotary_emb(freqs, k, seq_dim=1)
+        freqs = self.forward(seq_pos).unsqueeze(1)
+        q_rot = apply_rotary_emb(freqs, q, seq_dim=-2)
+        k_rot = apply_rotary_emb(freqs, k, seq_dim=-2)
         return q_rot, k_rot
