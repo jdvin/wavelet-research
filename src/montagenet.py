@@ -230,13 +230,22 @@ class ComplexMorletBank(nn.Module):
         self.K_sec = data_config.kernel_sec
         self.kernel_banks = {}
         self.d_model = d_model
+        self.data_config = data_config
+        self.check_kernel_banks()
+
+    def check_kernel_banks(self):
+        for sr in self.data_config.sampling_rates:
+            kernel_bank = self.kernel_for_sr(sr)
+            print(f"Kernel bank for sr={sr} has shape {kernel_bank.shape}")
+            # breakpoint()
+            # if sum(kernel_bank.sum(dim=1)) == 0:
 
     def kernel_for_sr(
         self,
         sr: int,
     ):
-        if self.kernel_banks.get(sr) is not None:
-            return self.kernel_banks[sr]
+        # if self.kernel_banks.get(sr) is not None:
+        #     return self.kernel_banks[sr]
         K = int(round(self.K_sec * sr)) | 1
         t = (torch.arange(K, device=self.f_c.device) - K // 2) / sr  # seconds
         f = F.softplus(self.f_c)  # >0 Hz
@@ -257,8 +266,9 @@ class ComplexMorletBank(nn.Module):
         # Stack as 2*d_model real filters: [real; imag]
         # TODO: reshape(2 * self.d_model, 1, K)???
         k = torch.stack([k_r, k_i], dim=1).reshape(self.d_model, K)
-        self.kernel_banks[sr] = k.contiguous()  # (2*d_model, 1, K)
-        return self.kernel_banks[sr]
+        return k.contiguous()  # (2*d_model, 1, K)
+        # self.kernel_banks[sr] = k.contiguous()  # (2*d_model, 1, K)
+        # return self.kernel_banks[sr]
 
     def __getitem__(self, sr):
         return self.kernel_for_sr(sr)

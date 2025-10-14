@@ -29,14 +29,14 @@ def lcmN(*nums: int) -> int:
 class SineMixDataset(Dataset):
     def __init__(
         self,
-        n_samples=2000,
-        seq_len_sec=1,
+        n_samples=10000,
+        seq_len_sec=2,
         sampling_rates=[128, 180],
         fs=128,
         n_channels=8,
         low=(6, 10),
         high=(18, 22),
-        snr_db=0,
+        snr_db=10,
     ):
         self.seq_len_sec, self.fs, self.n_channels = seq_len_sec, fs, n_channels
         ts = [np.arange(int(sr * seq_len_sec)) for sr in sampling_rates]
@@ -58,11 +58,17 @@ class SineMixDataset(Dataset):
             SR[i] = sr
             seq_positions[i, : len(t)] = np.arange(0, int(lcm * seq_len_sec), lcm // sr)
             f = rng.uniform(*(low if cls == 0 else high))
+            snr_lin = float("inf") if snr_db is None else 10 ** (snr_db / 10.0)
             for c in range(n_channels):
                 phase = rng.uniform(0, 2 * np.pi)
                 amp = rng.uniform(0.8, 1.2)
                 sig = amp * np.sin(2 * np.pi * f * t + phase)
                 sp = sig.var() + 1e-8
+                if np.isinf(snr_lin):
+                    noise = 0.0
+                else:
+                    noise_std = np.sqrt(sp / snr_lin)
+                    noise = rng.normal(0.0, noise_std, size=t.shape)
                 noise = rng.normal(0, np.sqrt(sp), size=t.shape)  # ~0 dB SNR
                 X[i, c, 0 : len(sig)] = (sig + noise).astype(np.float32)
         # Per-channel standardization over valid (masked) timesteps only
@@ -91,7 +97,7 @@ class SineMixDataset(Dataset):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model=64, nhead=4, dim_ff=128, nlayers=2, drop=0.1):
+    def __init__(self, d_model=32, nhead=4, dim_ff=64, nlayers=1, drop=0.1):
         super().__init__()
         rotary_embedding = RotaryEmbedding(dim=8)
         self.layers = nn.ModuleList(
@@ -115,15 +121,12 @@ class ModelA_RawTransformer(nn.Module):
         self.inp = nn.Linear(n_channels, d_model * n_channels)
         self.backbone = Transformer(
             d_model,
-            nhead=4,
-            dim_ff=128,
-            nlayers=2,
         )
         self.cls = nn.Linear(n_channels * d_model, n_classes)
 
     def forward(self, x, sr, mask, seq_pos):
         B, C, T = x.shape
-        last = (mask.sum(dim=1) - 1).clamp(min=0)
+        n_samples = mask.sum(dim=1)
         mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
         seq_pos = seq_pos.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
         x = x.transpose(1, 2)
@@ -134,9 +137,8 @@ class ModelA_RawTransformer(nn.Module):
             seq_pos,
         )
         h = rearrange(h, "(B C) T D -> B T (D C)", B=B, C=C, T=T)
-        idx = torch.arange(h.size(0), device=h.device)
-        last_hidden = h[idx, last]
-        return self.cls(last_hidden), h
+        h = h.sum(dim=1) / n_samples.unsqueeze(1)
+        return self.cls(h), h
 
 
 class ModelB_ConvThenTransformer(nn.Module):
@@ -145,12 +147,12 @@ class ModelB_ConvThenTransformer(nn.Module):
         n_channels = data_config.channel_counts[0]
         self.conv = ContinuousSignalEmbedder(data_config, d_model)
         self.proj = nn.Linear(d_model, d_model)
-        self.backbone = Transformer(d_model, nhead=4, dim_ff=128, nlayers=1)
+        self.backbone = Transformer(d_model)
         self.cls = nn.Linear(d_model * n_channels, n_classes)
 
     def forward(self, x, sr, mask, seq_pos):  # x: (B, C, T)
         B, C, T = x.shape
-        last = (mask.sum(dim=1) - 1).clamp(min=0)
+        n_samples = mask.sum(dim=1)
         mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
         seq_pos = seq_pos.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
         channel_counts = torch.tensor([C] * B)
@@ -167,15 +169,16 @@ class ModelB_ConvThenTransformer(nn.Module):
             seq_pos,
         )  # (BC, T, D)
         h = rearrange(h, "(B C) T D -> B T (D C)", B=B, C=C, T=T)
-        idx = torch.arange(B, device=h.device)
-        last_hidden = h[idx, last, :]
-        return self.cls(last_hidden), h
+        h = h.sum(dim=1) / n_samples.unsqueeze(1)
+        return self.cls(h), h
 
 
 # ---------- 5) Train / eval ----------
-def train(model, train_loader, val_loader, epochs=8, lr=1e-3, device="cpu"):
+def train(
+    model, train_loader, val_loader, epochs=8, lr=2e-3, weight_decay=0.01, device="cpu"
+):
     model.to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     crit = nn.CrossEntropyLoss()
     best, best_state = 0.0, None
     tr_hist, va_hist = [], []
@@ -225,13 +228,19 @@ def train(model, train_loader, val_loader, epochs=8, lr=1e-3, device="cpu"):
     return tr_hist, va_hist, best
 
 
-def accuracy(model, loader, device="cpu"):
+def accuracy(model, loader, device):
     model.eval()
     corr = tot = 0
     with torch.no_grad():
-        for xb, mb, sb, yb in loader:
-            xb, mb, sb, yb = xb.to(device), mb.to(device), sb.to(device), yb.to(device)
-            corr += (model(xb, mb, sb)[0].argmax(1) == yb).sum().item()
+        for xb, mb, lb, sb, yb in loader:
+            xb, mb, lb, sb, yb = (
+                xb.to(device),
+                mb.to(device),
+                lb.to(device),
+                sb.to(device),
+                yb.to(device),
+            )
+            corr += (model(xb, sb, mb, lb)[0].argmax(1) == yb).sum().item()
             tot += yb.size(0)
     return corr / tot
 
@@ -274,15 +283,27 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_set, batch_size=128, shuffle=False, num_workers=0)
 
     print("\nModel A: Raw Transformer")
-    modelA = ModelA_RawTransformer(data_config, d_model=64)
+    modelA = ModelA_RawTransformer(data_config, d_model=32)
     a_tr, a_va, a_best = train(
-        modelA, train_loader, val_loader, epochs=10, lr=1e-3, device=device
+        modelA,
+        train_loader,
+        val_loader,
+        epochs=20,
+        lr=1e-3,
+        weight_decay=0.01,
+        device=device,
     )
 
     print("\nModel B: Conv → Transformer")
-    modelB = ModelB_ConvThenTransformer(data_config, d_model=64)
+    modelB = ModelB_ConvThenTransformer(data_config, d_model=32)
     b_tr, b_va, b_best = train(
-        modelB, train_loader, val_loader, epochs=10, lr=1e-3, device=device
+        modelB,
+        train_loader,
+        val_loader,
+        epochs=20,
+        lr=1e-3,
+        weight_decay=0.01,
+        device=device,
     )
 
     a_test = accuracy(modelA, test_loader, device=device)
