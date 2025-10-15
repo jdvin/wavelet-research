@@ -3,7 +3,6 @@ from math import gcd
 from functools import reduce
 
 from einops import rearrange
-from torch.cuda import is_available
 import math, numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 import matplotlib.pyplot as plt
@@ -29,16 +28,15 @@ def lcmN(*nums: int) -> int:
 class SineMixDataset(Dataset):
     def __init__(
         self,
-        n_samples=10000,
-        seq_len_sec=2,
-        sampling_rates=[128, 180],
-        fs=128,
-        n_channels=8,
-        low=(6, 10),
-        high=(18, 22),
-        snr_db=10,
+        n_samples,
+        seq_len_sec,
+        sampling_rates,
+        n_channels,
+        low,
+        high,
+        snr_db,
     ):
-        self.seq_len_sec, self.fs, self.n_channels = seq_len_sec, fs, n_channels
+        self.seq_len_sec, self.n_channels = seq_len_sec, n_channels
         ts = [np.arange(int(sr * seq_len_sec)) for sr in sampling_rates]
         max_len = max([len(t) for t in ts])
         X = np.zeros((n_samples, n_channels, max_len), np.float32)
@@ -62,14 +60,13 @@ class SineMixDataset(Dataset):
             for c in range(n_channels):
                 phase = rng.uniform(0, 2 * np.pi)
                 amp = rng.uniform(0.8, 1.2)
-                sig = amp * np.sin(2 * np.pi * f * t + phase)
+                sig = amp * np.sin(2 * np.pi * f * (t / sr) + phase)
                 sp = sig.var() + 1e-8
                 if np.isinf(snr_lin):
                     noise = 0.0
                 else:
                     noise_std = np.sqrt(sp / snr_lin)
                     noise = rng.normal(0.0, noise_std, size=t.shape)
-                noise = rng.normal(0, np.sqrt(sp), size=t.shape)  # ~0 dB SNR
                 X[i, c, 0 : len(sig)] = (sig + noise).astype(np.float32)
         # Per-channel standardization over valid (masked) timesteps only
         mask = M[:, None, :].astype(np.float32)
@@ -97,7 +94,7 @@ class SineMixDataset(Dataset):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model=32, nhead=4, dim_ff=64, nlayers=1, drop=0.1):
+    def __init__(self, d_model, nhead, dim_ff, nlayers, drop):
         super().__init__()
         rotary_embedding = RotaryEmbedding(dim=8)
         self.layers = nn.ModuleList(
@@ -115,39 +112,61 @@ class Transformer(nn.Module):
 
 # ---------- 4) Two models ----------
 class ModelA_RawTransformer(nn.Module):
-    def __init__(self, data_config, d_model=64, n_classes=2):
+    def __init__(
+        self,
+        data_config,
+        d_model,
+        n_classes,
+        nhead,
+        dim_ff,
+        nlayers,
+        dropout,
+    ):
         super().__init__()
         n_channels = data_config.channel_counts[0]
         self.inp = nn.Linear(n_channels, d_model * n_channels)
         self.backbone = Transformer(
             d_model,
+            nhead,
+            dim_ff,
+            nlayers,
+            dropout,
         )
         self.cls = nn.Linear(n_channels * d_model, n_classes)
 
     def forward(self, x, sr, mask, seq_pos):
         B, C, T = x.shape
         n_samples = mask.sum(dim=1)
-        mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
+        expanded_mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
         seq_pos = seq_pos.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
         x = x.transpose(1, 2)
         x = self.inp(x)  # (B, T, DC)
         h = self.backbone(
             rearrange(x, "B T (D C) -> (B C) T D", B=B, T=T, C=C),
-            mask,
+            expanded_mask,
             seq_pos,
         )
         h = rearrange(h, "(B C) T D -> B T (D C)", B=B, C=C, T=T)
-        h = h.sum(dim=1) / n_samples.unsqueeze(1)
+        h = (h * mask.unsqueeze(-1)).sum(dim=1) / n_samples.unsqueeze(1)
         return self.cls(h), h
 
 
 class ModelB_ConvThenTransformer(nn.Module):
-    def __init__(self, data_config, d_model, n_classes=2):
+    def __init__(
+        self,
+        data_config,
+        d_model,
+        n_classes,
+        nhead,
+        dim_ff,
+        nlayers,
+        dropout,
+    ):
         super().__init__()
         n_channels = data_config.channel_counts[0]
         self.conv = ContinuousSignalEmbedder(data_config, d_model)
         self.proj = nn.Linear(d_model, d_model)
-        self.backbone = Transformer(d_model)
+        self.backbone = Transformer(d_model, nhead, dim_ff, nlayers, dropout)
         self.cls = nn.Linear(d_model * n_channels, n_classes)
 
     def forward(self, x, sr, mask, seq_pos):  # x: (B, C, T)
@@ -169,14 +188,12 @@ class ModelB_ConvThenTransformer(nn.Module):
             seq_pos,
         )  # (BC, T, D)
         h = rearrange(h, "(B C) T D -> B T (D C)", B=B, C=C, T=T)
-        h = h.sum(dim=1) / n_samples.unsqueeze(1)
+        h = (h * mask).sum(dim=1) / n_samples.unsqueeze(1)
         return self.cls(h), h
 
 
 # ---------- 5) Train / eval ----------
-def train(
-    model, train_loader, val_loader, epochs=8, lr=2e-3, weight_decay=0.01, device="cpu"
-):
+def train(model, train_loader, val_loader, epochs, lr, weight_decay, device):
     model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     crit = nn.CrossEntropyLoss()
@@ -247,8 +264,36 @@ def accuracy(model, loader, device):
 
 # ---------- 6) Run experiment ----------
 if __name__ == "__main__":
-    torch.manual_seed(0)
-    np.random.seed(0)
+    MANUAL_SEED = 0
+    NUMPY_SEED = 0
+    CHANNEL_COUNTS = [8]
+    SAMPLING_RATES = [128, 180]
+    FREQ_LOW_BAND = (6, 10)
+    FREQ_HIGH_BAND = (18, 22)
+    KERNEL_SECONDS = 0.5
+    SEQUENCE_LENGTH_SECONDS = 1.0
+    DATASET_NUM_SAMPLES = 10000
+    DATASET_FS = 128
+    DATASET_NUM_CHANNELS = 8
+    DATASET_SNR_DB = 10
+    TRAIN_FRACTION = 0.7
+    VAL_FRACTION = 0.15
+    TRAIN_BATCH_SIZE = 128
+    VAL_BATCH_SIZE = 256
+    TEST_BATCH_SIZE = 256
+    NUM_WORKERS = 0
+    MODEL_D_MODEL = 32
+    MODEL_NUM_CLASSES = 2
+    MODEL_NHEAD = 4
+    MODEL_DIM_FF = 64
+    MODEL_NLAYERS = 2
+    MODEL_DROPOUT = 0.1
+    TRAIN_EPOCHS = 100
+    LEARNING_RATE = 2e-3
+    WEIGHT_DECAY = 0.01
+
+    torch.manual_seed(MANUAL_SEED)
+    np.random.seed(NUMPY_SEED)
     if torch.cuda.is_available():
         device = "cuda"
     elif torch.backends.mps.is_available():
@@ -257,52 +302,78 @@ if __name__ == "__main__":
         device = "cpu"
 
     data_config = DataConfig(
-        channel_counts=[8],
-        sampling_rates=[128, 180],
-        f_min=6,
-        f_max=22,
-        kernel_sec=0.5,
-        sequence_length_seconds=1.0,
+        channel_counts=CHANNEL_COUNTS,
+        sampling_rates=SAMPLING_RATES,
+        f_min=FREQ_LOW_BAND[0],
+        f_max=FREQ_HIGH_BAND[1],
+        kernel_sec=KERNEL_SECONDS,
+        sequence_length_seconds=SEQUENCE_LENGTH_SECONDS,
     )
 
     ds = SineMixDataset(
-        seq_len_sec=int(data_config.sequence_length_seconds),
-        n_samples=2000,
-        fs=128,
-        n_channels=8,
-        snr_db=0,
+        n_samples=DATASET_NUM_SAMPLES,
+        seq_len_sec=int(SEQUENCE_LENGTH_SECONDS),
+        sampling_rates=SAMPLING_RATES,
+        n_channels=DATASET_NUM_CHANNELS,
+        low=FREQ_LOW_BAND,
+        high=FREQ_HIGH_BAND,
+        snr_db=DATASET_SNR_DB,
     )
-    n_train = int(0.7 * len(ds))
-    n_val = int(0.15 * len(ds))
+    n_train = int(TRAIN_FRACTION * len(ds))
+    n_val = int(VAL_FRACTION * len(ds))
     n_test = len(ds) - n_train - n_val
     train_set, val_set, test_set = random_split(
-        ds, [n_train, n_val, n_test], generator=torch.Generator().manual_seed(0)
+        ds,
+        [n_train, n_val, n_test],
+        generator=torch.Generator().manual_seed(MANUAL_SEED),
     )
-    train_loader = DataLoader(train_set, batch_size=64, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_set, batch_size=128, shuffle=False, num_workers=0)
-    test_loader = DataLoader(test_set, batch_size=128, shuffle=False, num_workers=0)
+    train_loader = DataLoader(
+        train_set, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS
+    )
+    val_loader = DataLoader(
+        val_set, batch_size=VAL_BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS
+    )
+    test_loader = DataLoader(
+        test_set, batch_size=TEST_BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS
+    )
 
     print("\nModel A: Raw Transformer")
-    modelA = ModelA_RawTransformer(data_config, d_model=32)
+    modelA = ModelA_RawTransformer(
+        data_config=data_config,
+        d_model=MODEL_D_MODEL,
+        n_classes=MODEL_NUM_CLASSES,
+        nhead=MODEL_NHEAD,
+        dim_ff=MODEL_DIM_FF,
+        nlayers=MODEL_NLAYERS,
+        dropout=MODEL_DROPOUT,
+    )
     a_tr, a_va, a_best = train(
         modelA,
         train_loader,
         val_loader,
-        epochs=20,
-        lr=1e-3,
-        weight_decay=0.01,
+        epochs=TRAIN_EPOCHS,
+        lr=LEARNING_RATE,
+        weight_decay=WEIGHT_DECAY,
         device=device,
     )
 
     print("\nModel B: Conv → Transformer")
-    modelB = ModelB_ConvThenTransformer(data_config, d_model=32)
+    modelB = ModelB_ConvThenTransformer(
+        data_config=data_config,
+        d_model=MODEL_D_MODEL,
+        n_classes=MODEL_NUM_CLASSES,
+        nhead=MODEL_NHEAD,
+        dim_ff=MODEL_DIM_FF,
+        nlayers=MODEL_NLAYERS,
+        dropout=MODEL_DROPOUT,
+    )
     b_tr, b_va, b_best = train(
         modelB,
         train_loader,
         val_loader,
-        epochs=20,
-        lr=1e-3,
-        weight_decay=0.01,
+        epochs=TRAIN_EPOCHS,
+        lr=LEARNING_RATE,
+        weight_decay=WEIGHT_DECAY,
         device=device,
     )
 
