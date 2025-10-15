@@ -246,7 +246,7 @@ class ComplexMorletBank(nn.Module):
     ):
         # if self.kernel_banks.get(sr) is not None:
         #     return self.kernel_banks[sr]
-        K = int(round(self.K_sec * sr)) | 1
+        K = int(round(self.K_sec * int(sr))) | 1
         t = (torch.arange(K, device=self.f_c.device) - K // 2) / sr  # seconds
         f = F.softplus(self.f_c)  # >0 Hz
         Q = torch.exp(self.log_Q) + 1.0  # >1
@@ -296,6 +296,7 @@ class ContinuousSignalEmbedder(nn.Module):
 
         NB: C variable per example.
         """
+        print("x shape", X.shape)
         BC, T = X.shape
         K_max = max(k.size(-1) for k in k_list)
         # center-pad every kernel bank to K_max
@@ -419,13 +420,13 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             sampling_rates = (
                 samples_mask.sum(dim=1) * self.data_config.sequence_length_seconds
             )
-        signals = torch.stack(
+        signals = torch.cat(
             [
                 source[i, :channel_count, :]
                 for i, channel_count in enumerate(channel_counts)
             ]
         )
-
+        print("signals", signals.shape)
         embeddings = self.embedder(signals, channel_counts, sampling_rates)
         source = rearrange(
             embeddings,

@@ -316,7 +316,6 @@ def mapped_label_ds_collate_fn(
         [],
         [],
     )
-    max_samples, max_channels = 0, 0
     for ds_sample in ds_samples:
         tasks.append(ds_sample["tasks"])
         labels.append(ds_sample["labels"])
@@ -328,11 +327,11 @@ def mapped_label_ds_collate_fn(
         assert isinstance(cp, Tensor)
         channel_mask = F.pad(
             torch.ones(cs.shape[0], dtype=torch.bool, device=cs.device),
-            (0, max_channels - cs.shape[0]),
+            (0, max_channels - cs.shape[1]),
         )
         samples_mask = F.pad(
             torch.ones(cs.shape[1], dtype=torch.bool, device=cs.device),
-            (0, max_samples - cs.shape[1]),
+            (0, max_samples - cs.shape[2]),
         )
         cs = F.pad(
             torch.tensor(cs),
@@ -340,7 +339,7 @@ def mapped_label_ds_collate_fn(
         )
         cp = F.pad(
             torch.tensor(cp),
-            (0, max_channels - cp.shape[0]),
+            (0, 0, 0, max_channels - cp.shape[0]),
         )
         channel_signals.append(cs)
         channel_positons.append(cp)
