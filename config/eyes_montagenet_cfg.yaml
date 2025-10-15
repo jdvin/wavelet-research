@@ -10,7 +10,15 @@ tasks:
   - key: eyes
     n_classes: 2
 data_config:
-  n_channels: 64
-  max_sr: 180
-  min_sr: 180
+  channel_counts:
+    - 5
+    - 8
+    - 64
+  sampling_rates:
+    - 128
+    - 128
+    - 180
   f_min: 2
+  f_max: 20
+  kernel_sec: 0.5
+  sequence_length_seconds: 1.0

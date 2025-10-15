@@ -237,8 +237,8 @@ class ComplexMorletBank(nn.Module):
         for sr in self.data_config.sampling_rates:
             kernel_bank = self.kernel_for_sr(sr)
             print(f"Kernel bank for sr={sr} has shape {kernel_bank.shape}")
-            # breakpoint()
-            # if sum(kernel_bank.sum(dim=1)) == 0:
+            if any(kernel_bank.abs().sum(dim=1) == 0):
+                print("WARNING: Some channels have no signal in the kernel bank.")
 
     def kernel_for_sr(
         self,
@@ -317,7 +317,7 @@ class ContinuousSignalEmbedder(nn.Module):
         return Y
 
     def forward(
-        self, x: Tensor, channel_counts: Tensor, srs: list[int], max_channels: int
+        self, x: Tensor, channel_counts: Tensor, srs: list[int]
     ) -> tuple[Tensor, Tensor]:
         """
         x: Input signal tensor of shape (BC, T) with channels folded into the batch dimension.
@@ -338,7 +338,7 @@ class ContinuousSignalEmbedder(nn.Module):
         for start, end in zip(indexes, indexes[1:] + [None]):
             # Slice out embedding of all channels for this training example and pad up to max channels.
             e = embs[start:end]
-            e = F.pad(e, (0, 0, 0, max_channels - e.shape[0]))
+            e = F.pad(e, (0, 0, 0, int(channel_counts.max() - e.shape[0])))
             E.append(e)
 
         return self.out(torch.stack(E))
@@ -382,6 +382,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
                 for _ in range(n_blocks)
             ]
         )
+        self.data_config = data_config
 
     def forward(
         self,
@@ -411,10 +412,21 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         )
         # TODO: Is this slicing maneuver cheaper than just running the padded signals through the embedder?
         # Could I write a custom kernel that recognises the channel mask and only computes the relevant channels?
+        channel_counts = channel_mask.sum(dim=1)
+        if samples_mask is None:
+            sampling_rates = self.data_config.sampling_rates[0]
+        else:
+            sampling_rates = (
+                samples_mask.sum(dim=1) * self.data_config.sequence_length_seconds
+            )
         signals = torch.stack(
-            [source[i, : channel_mask[i], :] for i in range(source.size(0))]
+            [
+                source[i, :channel_count, :]
+                for i, channel_count in enumerate(channel_counts)
+            ]
         )
-        embeddings, seq_positions = self.embedder(signals)
+
+        embeddings = self.embedder(signals, channel_counts, sampling_rates)
         source = rearrange(
             embeddings,
             "(B C) D T -> B C D T",

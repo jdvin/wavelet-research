@@ -172,7 +172,7 @@ class ModelB_ConvThenTransformer(nn.Module):
     def forward(self, x, sr, mask, seq_pos):  # x: (B, C, T)
         B, C, T = x.shape
         n_samples = mask.sum(dim=1)
-        mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
+        expanded_mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
         seq_pos = seq_pos.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
         channel_counts = torch.tensor([C] * B)
         x = rearrange(x, "B C T -> (B C) T", B=B, C=C)
@@ -184,11 +184,11 @@ class ModelB_ConvThenTransformer(nn.Module):
         )
         h = self.backbone(
             rearrange(z, "B C T D -> (B C) T D"),
-            mask,
+            expanded_mask,
             seq_pos,
         )  # (BC, T, D)
         h = rearrange(h, "(B C) T D -> B T (D C)", B=B, C=C, T=T)
-        h = (h * mask).sum(dim=1) / n_samples.unsqueeze(1)
+        h = (h * mask.unsqueeze(-1)).sum(dim=1) / n_samples.unsqueeze(1)
         return self.cls(h), h
 
 
@@ -272,10 +272,10 @@ if __name__ == "__main__":
     FREQ_HIGH_BAND = (18, 22)
     KERNEL_SECONDS = 0.5
     SEQUENCE_LENGTH_SECONDS = 1.0
-    DATASET_NUM_SAMPLES = 10000
+    DATASET_NUM_SAMPLES = 2000
     DATASET_FS = 128
     DATASET_NUM_CHANNELS = 8
-    DATASET_SNR_DB = 10
+    DATASET_SNR_DB = 0
     TRAIN_FRACTION = 0.7
     VAL_FRACTION = 0.15
     TRAIN_BATCH_SIZE = 128
@@ -288,8 +288,8 @@ if __name__ == "__main__":
     MODEL_DIM_FF = 64
     MODEL_NLAYERS = 2
     MODEL_DROPOUT = 0.1
-    TRAIN_EPOCHS = 100
-    LEARNING_RATE = 2e-3
+    TRAIN_EPOCHS = 5
+    LEARNING_RATE = 1e-3
     WEIGHT_DECAY = 0.01
 
     torch.manual_seed(MANUAL_SEED)

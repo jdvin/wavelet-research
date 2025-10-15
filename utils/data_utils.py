@@ -305,6 +305,8 @@ def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
 
 def mapped_label_ds_collate_fn(
     ds_samples: list[dict[str, torch.Tensor | int | np.memmap]],
+    max_samples: int,
+    max_channels: int,
 ) -> dict[str, torch.Tensor]:
     channel_signals, channel_positons, channel_masks, samples_masks, tasks, labels = (
         [],
@@ -316,18 +318,14 @@ def mapped_label_ds_collate_fn(
     )
     max_samples, max_channels = 0, 0
     for ds_sample in ds_samples:
-        assert isinstance(ds_sample["channel_signals"], torch.Tensor)
-        if ds_sample["channel_signals"].shape[0] > max_channels:
-            max_channels = ds_sample["channel_signals"].shape[0]
-        if ds_sample["channel_signals"].shape[1] > max_samples:
-            max_samples = ds_sample["channel_signals"].shape[1]
-        channel_positons.append(ds_sample["channel_positions"])
         tasks.append(ds_sample["tasks"])
         labels.append(ds_sample["labels"])
 
-    for ds_sample in ds_samples:
         cs = ds_sample["channel_signals"]
-        assert isinstance(cs, torch.Tensor)
+        cp = ds_sample["channel_positions"]
+
+        assert isinstance(cs, np.memmap)
+        assert isinstance(cp, Tensor)
         channel_mask = F.pad(
             torch.ones(cs.shape[0], dtype=torch.bool, device=cs.device),
             (0, max_channels - cs.shape[0]),
@@ -336,13 +334,21 @@ def mapped_label_ds_collate_fn(
             torch.ones(cs.shape[1], dtype=torch.bool, device=cs.device),
             (0, max_samples - cs.shape[1]),
         )
-        cs = F.pad(cs, (0, max_samples - cs.shape[1], 0, max_channels - cs.shape[0]))
+        cs = F.pad(
+            torch.tensor(cs),
+            (0, max_samples - cs.shape[1], 0, max_channels - cs.shape[0]),
+        )
+        cp = F.pad(
+            torch.tensor(cp),
+            (0, max_channels - cp.shape[0]),
+        )
         channel_signals.append(cs)
+        channel_positons.append(cp)
         samples_masks.append(samples_mask)
         channel_masks.append(channel_mask)
 
-    channel_signals_tensor = torch.tensor(np.array(channel_signals))
-    channel_positons_tensor = torch.tensor(channel_positons)
+    channel_signals_tensor = torch.stack(channel_signals)
+    channel_positons_tensor = torch.stack(channel_positons)
     channel_masks_tensor = torch.tensor(np.array(channel_masks))
     samples_masks_tensor = torch.tensor(np.array(samples_masks))
     tasks_tensor = torch.tensor(tasks)
@@ -433,8 +439,8 @@ def get_things_100ms_collate_fn(
 
 
 class EEGMMITask(Enum):
-    BASELINE_EYES_OPEN = "m_eyes_open"
-    BASELINE_EYES_CLOSED = "m_eyes_closed"
+    BASELINE_EYES_OPEN = "move_eyes_open"
+    BASELINE_EYES_CLOSED = "move_eyes_closed"
     TASK_1 = "move_left_right_fist"
     TASK_2 = "imag_left_right_fist"
     TASK_3 = "move_fist_feet"
@@ -461,7 +467,7 @@ SESSION_TO_TASK = {
 
 class Annotation(Enum):
     EYES_OPEN = "base_eyes_open"
-    EYES_CLOSED = "base_eyes_clos"
+    EYES_CLOSED = "base_eyes_closed"
     REST = "base_rest"
     MOVE_LEFT_FIST = "move_left_fist"
     MOVE_RIGHT_FIST = "move_right_fist"
@@ -544,13 +550,13 @@ ANNOTATION_CODE_MAP: dict[int, dict[str, Annotation]] = {
 
 
 EMOTIV_EVENT_TYPE_TO_LABEL = {
-    "eyesopen_element": "eyes_open",
-    "eyesopen": "eyes_open",
-    "eyesclose_element": "eyes_closed",
-    "eyesclose": "eyes_closed",
+    "eyesopen_element": "base_eyes_open",
+    "eyesopen": "base_eyes_open",
+    "eyesclose_element": "base_eyes_closed",
+    "eyesclose": "base_eyes_closed",
 }
 
-EMOTIV_TASK_LABEL = "alpha_suppression"
+EMOTIV_TASK_LABEL = "move_eyes_closed"
 
 EMOTIV_FILENAME_PATTERN = re.compile(
     r"^(?P<root>Alpha Supression_(?P<headset>[A-Z0-9]+)_.+?)(?P<suffix>_markers)?_S(?P<subject>\d{3})\.(?P<extension>csv|json)$"
