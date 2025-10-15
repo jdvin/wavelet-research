@@ -307,7 +307,8 @@ class ContinuousSignalEmbedder(nn.Module):
             right = K_max - Ki - left
             K_pad.append(F.pad(k, (left, right)))  # (d_model,1,K_max)
         W = rearrange(
-            torch.cat(K_pad, dim=0), "BC D K -> (BC D) 1 K"  # (BC*d_model,1,K_max)
+            torch.cat(K_pad, dim=0).to(X.dtype),
+            "BC D K -> (BC D) 1 K",  # (BC*d_model,1,K_max)
         )
 
         # grouped conv: groups=BC, in_channels=BC, out_channels=BC*d_model
@@ -389,6 +390,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         self,
         source: Tensor,
         channel_positions: Tensor,
+        sequence_positions: Tensor,
         channel_mask: Tensor | None = None,
         samples_mask: Tensor | None = None,
     ) -> Tensor:
@@ -430,11 +432,12 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         embeddings = self.embedder(signals, channel_counts, sampling_rates)
         source = rearrange(
             embeddings,
-            "(B C) D T -> B C D T",
+            "B C T D -> B C D T",
             B=B,
             C=C,
             D=self.d_model,
         )
+        # Perpare source for spatial attention.
         source = rearrange(source + pos_emb, "B C D T -> (B T) C D")
         # source = rearrange(source, "B C D T -> (B T) C D")
         # Initialize query latents
@@ -452,7 +455,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
                 latents,
                 source,
                 T,
-                seq_pos=seq_positions,
+                seq_pos=sequence_positions,
                 spatial_attention_mask=channel_mask,
                 temporal_attention_mask=samples_mask,
             )
@@ -569,6 +572,7 @@ class MontageNet(nn.Module):
         (
             channel_signals,
             channel_positions,
+            sequence_positions,
             channel_mask,
             samples_mask,
             task_keys,
@@ -576,13 +580,18 @@ class MontageNet(nn.Module):
         ) = (
             batch["channel_signals"],
             batch["channel_positions"],
+            batch["sequence_positions"],
             batch["channel_mask"],
             batch["samples_mask"],
             batch["tasks"],
             batch["labels"],
         )
         latents = self.encoder(
-            channel_signals, channel_positions, channel_mask, samples_mask
+            channel_signals,
+            channel_positions,
+            sequence_positions,
+            channel_mask,
+            samples_mask,
         )
         losses, logits = [], []
         for (

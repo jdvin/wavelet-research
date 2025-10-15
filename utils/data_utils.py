@@ -17,6 +17,7 @@ from torch import Tensor
 from tqdm import tqdm
 from pnpl.datasets import LibriBrainSpeech
 
+from src.montagenet import DataConfig
 from utils.torch_datasets import (
     LibriBrainSpeechDataset,
     MappedLabelDataset,
@@ -308,7 +309,16 @@ def mapped_label_ds_collate_fn(
     max_samples: int,
     max_channels: int,
 ) -> dict[str, torch.Tensor]:
-    channel_signals, channel_positons, channel_masks, samples_masks, tasks, labels = (
+    (
+        channel_signals,
+        channel_positons,
+        sequence_positions,
+        channel_masks,
+        samples_masks,
+        tasks,
+        labels,
+    ) = (
+        [],
         [],
         [],
         [],
@@ -322,16 +332,18 @@ def mapped_label_ds_collate_fn(
 
         cs = ds_sample["channel_signals"]
         cp = ds_sample["channel_positions"]
+        sp = ds_sample["sequence_positions"]
 
         assert isinstance(cs, np.memmap)
         assert isinstance(cp, Tensor)
+        assert isinstance(sp, Tensor)
         channel_mask = F.pad(
             torch.ones(cs.shape[0], dtype=torch.bool, device=cs.device),
-            (0, max_channels - cs.shape[1]),
+            (0, max_channels - cs.shape[0]),
         )
         samples_mask = F.pad(
             torch.ones(cs.shape[1], dtype=torch.bool, device=cs.device),
-            (0, max_samples - cs.shape[2]),
+            (0, max_samples - cs.shape[1]),
         )
         cs = F.pad(
             torch.tensor(cs),
@@ -341,13 +353,19 @@ def mapped_label_ds_collate_fn(
             torch.tensor(cp),
             (0, 0, 0, max_channels - cp.shape[0]),
         )
+        sp = F.pad(
+            torch.tensor(sp),
+            (0, max_samples - sp.shape[0]),
+        )
         channel_signals.append(cs)
         channel_positons.append(cp)
+        sequence_positions.append(sp)
         samples_masks.append(samples_mask)
         channel_masks.append(channel_mask)
 
     channel_signals_tensor = torch.stack(channel_signals)
     channel_positons_tensor = torch.stack(channel_positons)
+    sequence_positions_tensor = torch.stack(sequence_positions)
     channel_masks_tensor = torch.tensor(np.array(channel_masks))
     samples_masks_tensor = torch.tensor(np.array(samples_masks))
     tasks_tensor = torch.tensor(tasks)
@@ -355,6 +373,7 @@ def mapped_label_ds_collate_fn(
     return {
         "channel_signals": channel_signals_tensor,
         "channel_positions": channel_positons_tensor,
+        "sequence_positions": sequence_positions_tensor,
         "channel_mask": channel_masks_tensor,
         "samples_mask": samples_masks_tensor,
         "tasks": tasks_tensor,
@@ -622,6 +641,7 @@ class DataSplit:
     source_base_path: str
     output_path: str
     headset: Headset
+    sampling_rate: int
     data_source: DataSource
     max_subjects: int = 0
     max_sessions: int = 0
@@ -1104,6 +1124,7 @@ def get_multi_mapped_label_datasets(
     splits: list[DataSplit],
     labels_map: dict[str, int],
     tasks_map: dict[str, int],
+    data_config: DataConfig,
     reset_cache: bool = False,
 ):
     ret = {}
@@ -1150,6 +1171,8 @@ def get_multi_mapped_label_datasets(
             labels_map,
             tasks_map,
             electrode_positions,
+            data_config,
+            split.sampling_rate,
             channel_mask,
         )
 
