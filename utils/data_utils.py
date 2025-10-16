@@ -306,8 +306,6 @@ def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
 
 def mapped_label_ds_collate_fn(
     ds_samples: list[dict[str, torch.Tensor | int | np.memmap]],
-    max_samples: int,
-    max_channels: int,
 ) -> dict[str, torch.Tensor]:
     (
         channel_signals,
@@ -326,6 +324,17 @@ def mapped_label_ds_collate_fn(
         [],
         [],
     )
+    channel_counts, samples_counts = zip(
+        *[
+            (
+                ds_sample["channel_signals"].shape[0],
+                ds_sample["channel_signals"].shape[1],
+            )
+            for ds_sample in ds_samples
+        ]
+    )
+    max_channels = max(channel_counts)
+    max_samples = max(samples_counts)
     for ds_sample in ds_samples:
         tasks.append(ds_sample["tasks"])
         labels.append(ds_sample["labels"])
@@ -340,23 +349,20 @@ def mapped_label_ds_collate_fn(
         channel_mask = F.pad(
             torch.ones(cs.shape[0], dtype=torch.bool, device=cs.device),
             (0, max_channels - cs.shape[0]),
+            value=False,
         )
         samples_mask = F.pad(
             torch.ones(cs.shape[1], dtype=torch.bool, device=cs.device),
             (0, max_samples - cs.shape[1]),
+            value=False,
         )
         cs = F.pad(
             torch.tensor(cs),
             (0, max_samples - cs.shape[1], 0, max_channels - cs.shape[0]),
         )
-        cp = F.pad(
-            torch.tensor(cp),
-            (0, 0, 0, max_channels - cp.shape[0]),
-        )
-        sp = F.pad(
-            torch.tensor(sp),
-            (0, max_samples - sp.shape[0]),
-        )
+        cp = F.pad(cp, (0, 0, 0, max_channels - cp.shape[0]))
+        sp = F.pad(sp, (0, max_samples - sp.shape[0]))
+
         channel_signals.append(cs)
         channel_positons.append(cp)
         sequence_positions.append(sp)
@@ -366,8 +372,8 @@ def mapped_label_ds_collate_fn(
     channel_signals_tensor = torch.stack(channel_signals)
     channel_positons_tensor = torch.stack(channel_positons)
     sequence_positions_tensor = torch.stack(sequence_positions)
-    channel_masks_tensor = torch.tensor(np.array(channel_masks))
-    samples_masks_tensor = torch.tensor(np.array(samples_masks))
+    channel_masks_tensor = torch.stack(channel_masks).to(dtype=torch.bool)
+    samples_masks_tensor = torch.stack(samples_masks).to(dtype=torch.bool)
     tasks_tensor = torch.tensor(tasks)
     labels_tensor = torch.tensor(labels)
     return {
@@ -640,8 +646,8 @@ class DataSplit:
     sessions: list[int]
     source_base_path: str
     output_path: str
-    headset: Headset
     sampling_rate: int
+    headset: Headset
     data_source: DataSource
     max_subjects: int = 0
     max_sessions: int = 0
@@ -1008,7 +1014,8 @@ def _write_emotiv_recording_data(
             continue
         channel_series = pd.to_numeric(df[column_name], errors="coerce").fillna(0.0)
         data = channel_series.to_numpy(dtype=np.float32, copy=False)
-        signals[idx, : data.shape[0]] = data
+        # Normalize the data.
+        signals[idx, : data.shape[0]] = (data - data.mean(axis=0)) / data.std(axis=0)
 
     next_epoch_idx = start_epoch_idx
     for event in recording.events:

@@ -115,7 +115,11 @@ def main(
     # TODO: Distributed dataset creation.
     if is_main_process:
         ds = get_multi_mapped_label_datasets(
-            ds_splits, cfg.ds_labels_map, cfg.ds_tasks_map, reset_data_cache
+            ds_splits,
+            cfg.ds_labels_map,
+            cfg.ds_tasks_map,
+            model_config.data_config,
+            reset_data_cache,
         )
 
         if world_size > 1:
@@ -123,17 +127,16 @@ def main(
     else:
         dist.barrier()
         ds = get_multi_mapped_label_datasets(
-            ds_splits, cfg.ds_labels_map, cfg.ds_tasks_map, reset_data_cache
+            ds_splits,
+            cfg.ds_labels_map,
+            cfg.ds_tasks_map,
+            model_config.data_config,
+            reset_data_cache,
         )
 
     logger.info("Creating data loaders.")
     max_sr = max(model_config.data_config.sampling_rates)
     max_channels = max(model_config.data_config.channel_counts)
-    collate_fn = partial(
-        mapped_label_ds_collate_fn,
-        max_samples=int(max_sr * model_config.data_config.sequence_length_seconds),
-        max_channels=max_channels,
-    )
     # Create data loaders.
     (
         train_dataloader,
@@ -146,8 +149,8 @@ def main(
         cfg.val_micro_batch_size,
         rank,
         world_size,
-        collate_fn,
-        collate_fn,
+        mapped_label_ds_collate_fn,
+        mapped_label_ds_collate_fn,
     )
     # Steps per epoch is the number of batches in the training set.
     steps_per_epoch = math.ceil(len(train_dataloader) / grad_accum_steps)

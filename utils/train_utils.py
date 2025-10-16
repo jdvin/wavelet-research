@@ -183,12 +183,12 @@ def get_microbatch(
         k: (
             v.pin_memory().to(
                 device=device,
-                dtype=dtype if torch.is_floating_point(v) else torch.long,
+                dtype=dtype if torch.is_floating_point(v) else v.dtype,
                 non_blocking=True,
             )
             if isinstance(device, int)
             else v.to(
-                device=device, dtype=dtype if torch.is_floating_point(v) else torch.long
+                device=device, dtype=dtype if torch.is_floating_point(v) else v.dtype
             )
         )
         for k, v in micro_batch.items()

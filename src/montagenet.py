@@ -99,7 +99,7 @@ class PerceiverResamplerBlock(nn.Module):
         source = self.source_ln(source)
         latents = latents + self.cross_attn(
             latents,
-            torch.cat([source, latents], dim=1),
+            torch.cat([latents, source], dim=1),
             attention_mask=attention_mask,
             kv_cache=kv_cache,
         )
@@ -296,7 +296,6 @@ class ContinuousSignalEmbedder(nn.Module):
 
         NB: C variable per example.
         """
-        print("x shape", X.shape)
         BC, T = X.shape
         K_max = max(k.size(-1) for k in k_list)
         # center-pad every kernel bank to K_max
@@ -340,7 +339,7 @@ class ContinuousSignalEmbedder(nn.Module):
         for start, end in zip(indexes, indexes[1:] + [None]):
             # Slice out embedding of all channels for this training example and pad up to max channels.
             e = embs[start:end]
-            e = F.pad(e, (0, 0, 0, int(channel_counts.max() - e.shape[0])))
+            e = F.pad(e, (0, 0, 0, 0, 0, int(channel_counts.max() - e.shape[0])))
             E.append(e)
 
         return self.out(torch.stack(E))
@@ -428,7 +427,6 @@ class SpatioTemporalPerceiverResampler(nn.Module):
                 for i, channel_count in enumerate(channel_counts)
             ]
         )
-        print("signals", signals.shape)
         embeddings = self.embedder(signals, channel_counts, sampling_rates)
         source = rearrange(
             embeddings,
@@ -448,6 +446,19 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             T=T,
             D=self.d_model,
             L=self.n_latents,
+        )
+        CpL = C + self.n_latents
+        # Add "1" to the left of each channel mask to account for attending to the query latents.
+        # Expand each mask for the temporal dimsion.
+        # Fold temporal dimension into batch dimension.
+        channel_mask = rearrange(
+            F.pad(channel_mask, (self.n_latents, 0), value=True)
+            .unsqueeze(1)
+            .expand(-1, T, -1),
+            "B T CpL -> (B T) CpL",
+            B=B,
+            T=T,
+            CpL=CpL,
         )
 
         for block in self.blocks:

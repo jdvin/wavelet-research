@@ -143,7 +143,7 @@ class MultiHeadAttention(torch.nn.Module):
         )
         if attention_mask is not None:
             attention_mask = attention_mask[:, None, None, :].expand(
-                B, self.n_heads, T_kv, T_q
+                B, self.n_heads, T_q, T_kv
             )
             if bias is not None:
                 attention_mask = attention_mask + bias
