@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 from typing import Any, Iterable
 from functools import partial
 import torch
@@ -217,7 +218,72 @@ class TaskConfig:
     n_classes: int
 
 
-class ComplexMorletBank(nn.Module):
+class SpectrumGridKernelFactory(nn.Module):
+    """
+    Learn a spectrum on a shared Hz grid with spacing Δf = 1/kernel_sec.
+    For each sr: build only the unaliased positive-half spectrum and irfft
+    at native length K = round(kernel_sec * sr). Real time-domain kernels by construction.
+    """
+
+    def __init__(
+        self,
+        data_config: DataConfig,
+        d_model: int,
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.kernel_sec = float(data_config.kernel_sec)
+        # Shared Hz grid (positive half), independent of SR:
+        # freqs = [0, Δf, 2Δf, ...] up to f_max
+        self.df = 1.0 / self.kernel_sec
+        n_bins = int(math.floor(data_config.f_max / self.df)) + 1  # include DC
+        self.register_buffer(
+            "freqs_hz", torch.arange(n_bins) * self.df, persistent=False
+        )
+
+        # Parameterize log-magnitude and phase on this grid
+        self.logmag = nn.Parameter(torch.full((d_model, n_bins), -4.0))
+        self.phase = nn.Parameter(torch.zeros(d_model, n_bins))
+
+    def kernel_for_sr(self, sr: int, device=None, dtype=None):
+        if device is None:
+            device = self.logmag.device
+        if dtype is None:
+            dtype = self.logmag.dtype
+
+        # Native kernel length & rfft size for this sr
+        K = int(round(self.kernel_sec * int(sr))) | 1
+        F = K // 2 + 1
+        nyq = 0.5 * sr
+
+        # Select only unaliased bins (<= nyquist) from the shared grid
+        keep = self.freqs_hz <= nyq
+        H_pos = torch.zeros(self.d_model, F, dtype=torch.complex64, device=device)
+
+        # Indices on the shared grid we will copy from
+        src = keep.nonzero(as_tuple=False).squeeze(-1)
+        if src.numel() > 0:
+            # Destination indices on the native rfft grid: they match in Hz because Δf = sr/K = 1/kernel_sec
+            # (same Δf by design). Clip if shared grid is longer than native F.
+            dst = torch.arange(min(src.numel(), F), device=device)
+            mag = self.logmag[:, src].exp()  # (d_model, |src|)
+            phs = self.phase[:, src]
+            H_pos[:, dst] = mag[:, : dst.numel()] * torch.exp(
+                1j * phs[:, : dst.numel()]
+            )
+
+        # Enforce real DC and Nyquist
+        H_pos[:, 0] = H_pos[:, 0].real
+        if K % 2 == 0:
+            H_pos[:, -1] = H_pos[:, -1].real
+
+        # Time-domain kernel on native grid
+        h = torch.fft.irfft(H_pos, n=K)  # (d_model, K), real
+        h = h / (h.norm(dim=-1, keepdim=True) + 1e-8)  # stabilize scale
+        return h.squeeze(0)  # (d_model, 1, K)
+
+
+class ComplexMorletFactory(nn.Module):
     def __init__(self, data_config: DataConfig, d_model: int):
         super().__init__()
         # Learn center freq and log-bandwidth per filter (Hz, seconds)
@@ -270,8 +336,10 @@ class ComplexMorletBank(nn.Module):
         # self.kernel_banks[sr] = k.contiguous()  # (2*d_model, 1, K)
         # return self.kernel_banks[sr]
 
-    def __getitem__(self, sr):
-        return self.kernel_for_sr(sr)
+
+class KernelFactoryType(Enum):
+    MORLET = "morlet"
+    SPECTRUM = "spectrum"
 
 
 class ContinuousSignalEmbedder(nn.Module):
@@ -279,11 +347,16 @@ class ContinuousSignalEmbedder(nn.Module):
         self,
         data_config: DataConfig,
         d_model: int,
+        kernel_factory_type: KernelFactoryType = KernelFactoryType.SPECTRUM,
     ):
         super().__init__()
         self.data_config = data_config
         assert d_model % 2 == 0
-        self.kernel_bank_factory = ComplexMorletBank(data_config, d_model)
+        self.kernel_bank_factory = (
+            ComplexMorletFactory(data_config, d_model)
+            if kernel_factory_type == KernelFactoryType.MORLET
+            else SpectrumGridKernelFactory(data_config, d_model)
+        )
         self.d_model = d_model
         self.sr_lcm = lcmN(*data_config.sampling_rates)
         self.out = nn.Linear(d_model, d_model)
@@ -330,7 +403,7 @@ class ContinuousSignalEmbedder(nn.Module):
         indexes = [0] + channel_counts.cumsum(dim=0).tolist()[:-1]
         # NEED ONE KERNEL PER CHANNEL
         kernel_banks_list = [
-            self.kernel_bank_factory[sr].unsqueeze(0).expand(C, -1, -1)
+            self.kernel_bank_factory.kernel_for_sr(sr).unsqueeze(0).expand(C, -1, -1)
             for C, sr in zip(channel_counts, srs)
         ]
 
@@ -354,6 +427,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         n_heads: int,
         d_mlp: int,
         n_blocks: int,
+        rope_dim: int,
         return_latents: ReturnLatents,
         dropout: float = 0.0,
         scale_exponent: float = -0.25,
@@ -363,7 +437,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         self.n_latents = n_latents
         self.return_latents = return_latents
         self.query_latents = nn.Parameter(torch.randn(n_latents, d_model))
-        rotary_embedding = RotaryEmbedding(dim=32, cache_max_seq_len=256)
+        rotary_embedding = RotaryEmbedding(dim=rope_dim, cache_max_seq_len=256)
         self.embedder = ContinuousSignalEmbedder(
             data_config,
             d_model,
@@ -416,10 +490,12 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         # Could I write a custom kernel that recognises the channel mask and only computes the relevant channels?
         channel_counts = channel_mask.sum(dim=1)
         if samples_mask is None:
+            # The only time this should be None is when there is only one sampling rate.
+            assert len(self.data_config.sampling_rates) == 1
             sampling_rates = self.data_config.sampling_rates[0]
         else:
             sampling_rates = (
-                samples_mask.sum(dim=1) * self.data_config.sequence_length_seconds
+                samples_mask.sum(dim=1) // self.data_config.sequence_length_seconds
             )
         signals = torch.cat(
             [
@@ -509,6 +585,7 @@ class MontageNetConfig:
     dropout: float
     scale_exponent: float
     return_latents: ReturnLatents
+    rope_dim: int
     n_blocks: int
     tasks: list[TaskConfig]
     data_config: DataConfig
@@ -522,6 +599,7 @@ class MontageNetConfig:
         dropout,
         scale_exponent,
         return_latents,
+        rope_dim,
         n_blocks,
         tasks: list[dict[str, Any]],
         data_config: dict[str, Any],
@@ -532,6 +610,7 @@ class MontageNetConfig:
         self.d_mlp = d_mlp
         self.dropout = dropout
         self.scale_exponent = scale_exponent
+        self.rope_dim = rope_dim
         self.n_blocks = n_blocks
         self.tasks = [TaskConfig(**task) for task in tasks]
         self.data_config = DataConfig(**data_config)
@@ -556,6 +635,7 @@ class MontageNet(nn.Module):
             config.n_heads,
             config.d_mlp,
             config.n_blocks,
+            config.rope_dim,
             config.return_latents,
             config.dropout,
             config.scale_exponent,

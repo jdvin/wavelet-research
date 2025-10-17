@@ -1,24 +1,24 @@
 n_latents: 1
-d_model: 512
-n_heads: 8
-d_mlp: 1024
+d_model: 64
+n_heads: 4
+d_mlp: 128
+rope_dim: 8
 dropout: 0.1
 scale_exponent: -0.25
 return_latents: mean_pool
-n_blocks: 2
+n_blocks: 1
 tasks:
   - key: eyes
     n_classes: 2
 data_config:
   channel_counts:
     - 5
-    - 8
+    - 14
     - 64
   sampling_rates:
     - 128
-    - 128
     - 180
-  f_min: 2
-  f_max: 20
-  kernel_sec: 0.5
-  sequence_length_seconds: 1.0
+  f_min: 0.5
+  f_max: 40
+  kernel_sec: 2.5
+  sequence_length_seconds: 5.0

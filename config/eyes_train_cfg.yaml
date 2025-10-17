@@ -14,7 +14,7 @@ ds_split_configs:
     channel_mask: None
     data_source: eeg_mmi
     headset: physionet_64
-    epoch_length: 180
+    epoch_length: 900
     sampling_rate: 180
   - split_name: eeg_mmi_eyes_val
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/eeg-motor-movement-imagery"
@@ -24,7 +24,7 @@ ds_split_configs:
     channel_mask: None
     data_source: eeg_mmi
     headset: physionet_64
-    epoch_length: 180
+    epoch_length: 900
     sampling_rate: 180
   - split_name: train
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/epoc"
@@ -34,7 +34,7 @@ ds_split_configs:
     channel_mask: None
     data_source: emotive_alpha
     headset: emotiv_epoc_14
-    epoch_length: 128
+    epoch_length: 640
     sampling_rate: 128
   - split_name: emotiv_alpha_eyes_val
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/epoc"
@@ -44,7 +44,7 @@ ds_split_configs:
     channel_mask: None
     data_source: emotive_alpha
     headset: emotiv_epoc_14
-    epoch_length: 128
+    epoch_length: 640
     sampling_rate: 128
   - split_name: train
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
@@ -54,7 +54,7 @@ ds_split_configs:
     channel_mask: None
     data_source: emotive_alpha
     headset: emotiv_insight_5
-    epoch_length: 128
+    epoch_length: 640
     sampling_rate: 128
   - split_name: emotiv_alpha_eyes_val
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
@@ -64,12 +64,12 @@ ds_split_configs:
     channel_mask: None
     data_source: emotive_alpha
     headset: emotiv_insight_5
-    epoch_length: 128
+    epoch_length: 640
     sampling_rate: 128
-num_epochs: 15
-batch_size: 32
+num_epochs: 40
+batch_size: 64
 train_micro_batch_size: 8
-val_micro_batch_size: 32
+val_micro_batch_size: 64
 validation_interval: 1.0
 log_interval: 1
 max_lr: 0.0001
@@ -83,17 +83,17 @@ lr_schedules:
   #   type: exponential
   #   kargs:
   #     gamma: 0.1
-  - start: 0.05
-    type: cosine
-    kargs:
-      eta_min: 0.0
-  # - start: 0.25
-  #   type: constant
-  #   kargs:
-  #     factor: 1.0
-  # - start: 0.5
+  # - start: 0.05
   #   type: cosine
   #   kargs:
   #     eta_min: 0.0
+  - start: 0.10
+    type: constant
+    kargs:
+      factor: 1.0
+  - start: 0.5
+    type: cosine
+    kargs:
+      eta_min: 0.0
 weight_decay: 0.01
 grad_clip: 1.0

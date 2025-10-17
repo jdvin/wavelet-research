@@ -407,19 +407,31 @@ def main():
     # Plot multiple montages with different colors
     # montage_names = ["GSN-HydroCel-129"]  # Default single montage
     # Example of multiple montages:
-    dig_montage = physionet_64_montage().get_positions()["ch_pos"]
-    full_montage = Montage(
-        "phsyionet-64", list(dig_montage.keys()), np.array(list(dig_montage.values()))
+    physionet_dict = physionet_64_montage().get_positions()["ch_pos"]
+    physionet_montage = Montage(
+        "physionet-64",
+        list(physionet_dict.keys()),
+        np.array(list(physionet_dict.values())),
     )
-    occipital = mask_regions(full_montage, [Region.OCCIPITAL])
-    parietal = mask_regions(full_montage, [Region.PARIETAL])
-    temporal = mask_regions(full_montage, [Region.TEMPORAL])
-    frontal = mask_regions(full_montage, [Region.FRONTAL])
-    colors = ["blue", "red", "green", "orange"]
-    montages = [occipital, parietal, temporal, frontal]
+    insight_dict = {ch: STANDARD_1020[ch] for ch in INSIGHT5_CHANNELS}
+    insight_montage = Montage(
+        "insight-5", list(insight_dict.keys()), np.array(list(insight_dict.values()))
+    )
+    epoch_dict = {ch: STANDARD_1020[ch] for ch in EPOC14_CHANNELS}
+    epoch_montage = Montage(
+        "epoch-14", list(epoch_dict.keys()), np.array(list(epoch_dict.values()))
+    )
+
+    # occipital = mask_regions(full_montage, [Region.OCCIPITAL])
+    # parietal = mask_regions(full_montage, [Region.PARIETAL])
+    # temporal = mask_regions(full_montage, [Region.TEMPORAL])
+    # frontal = mask_regions(full_montage, [Region.FRONTAL])
+    colors = ["blue", "red", "green"]
+    # montages = [occipital, parietal, temporal, frontal]
+    montages = [physionet_montage, insight_montage, epoch_montage]
 
     electrode_positions = plot_montages(
-        fig, montages, colors, full_montage, skull_bounds=skull_bounds
+        fig, montages, colors, physionet_montage, skull_bounds=skull_bounds
     )
 
     # Configure layout for better performance and appearance - include electrode positions in bounds

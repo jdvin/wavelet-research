@@ -9,7 +9,12 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from src.components.rope import RotaryEmbedding
-from src.montagenet import DataConfig, TemporalAttentionBlock, ContinuousSignalEmbedder
+from src.montagenet import (
+    DataConfig,
+    KernelFactoryType,
+    TemporalAttentionBlock,
+    ContinuousSignalEmbedder,
+)
 
 
 # ---------- 1) Synthetic dataset ----------
@@ -151,7 +156,7 @@ class ModelA_RawTransformer(nn.Module):
         return self.cls(h), h
 
 
-class ModelB_ConvThenTransformer(nn.Module):
+class ModelB_MorletConvThenTransformer(nn.Module):
     def __init__(
         self,
         data_config,
@@ -180,7 +185,48 @@ class ModelB_ConvThenTransformer(nn.Module):
             x,
             channel_counts,
             sr.tolist(),
-            max_channels=C,
+        )
+        h = self.backbone(
+            rearrange(z, "B C T D -> (B C) T D"),
+            expanded_mask,
+            seq_pos,
+        )  # (BC, T, D)
+        h = rearrange(h, "(B C) T D -> B T (D C)", B=B, C=C, T=T)
+        h = (h * mask.unsqueeze(-1)).sum(dim=1) / n_samples.unsqueeze(1)
+        return self.cls(h), h
+
+
+class ModelC_SpectralConvThenTransformer(nn.Module):
+    def __init__(
+        self,
+        data_config,
+        d_model,
+        n_classes,
+        nhead,
+        dim_ff,
+        nlayers,
+        dropout,
+    ):
+        super().__init__()
+        n_channels = data_config.channel_counts[0]
+        self.conv = ContinuousSignalEmbedder(
+            data_config, d_model, kernel_factory_type=KernelFactoryType.SPECTRUM
+        )
+        self.proj = nn.Linear(d_model, d_model)
+        self.backbone = Transformer(d_model, nhead, dim_ff, nlayers, dropout)
+        self.cls = nn.Linear(d_model * n_channels, n_classes)
+
+    def forward(self, x, sr, mask, seq_pos):  # x: (B, C, T)
+        B, C, T = x.shape
+        n_samples = mask.sum(dim=1)
+        expanded_mask = mask.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
+        seq_pos = seq_pos.unsqueeze(1).expand(-1, C, -1).reshape(B * C, T)
+        channel_counts = torch.tensor([C] * B)
+        x = rearrange(x, "B C T -> (B C) T", B=B, C=C)
+        z = self.conv(
+            x,
+            channel_counts,
+            sr.tolist(),
         )
         h = self.backbone(
             rearrange(z, "B C T D -> (B C) T D"),
@@ -337,8 +383,47 @@ if __name__ == "__main__":
         test_set, batch_size=TEST_BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS
     )
 
-    print("\nModel A: Raw Transformer")
-    modelA = ModelA_RawTransformer(
+    # print("\nModel A: Raw Transformer")
+    # modelA = ModelA_RawTransformer(
+    #     data_config=data_config,
+    #     d_model=MODEL_D_MODEL,
+    #     n_classes=MODEL_NUM_CLASSES,
+    #     nhead=MODEL_NHEAD,
+    #     dim_ff=MODEL_DIM_FF,
+    #     nlayers=MODEL_NLAYERS,
+    #     dropout=MODEL_DROPOUT,
+    # )
+    # a_tr, a_va, a_best = train(
+    #     modelA,
+    #     train_loader,
+    #     val_loader,
+    #     epochs=TRAIN_EPOCHS,
+    #     lr=LEARNING_RATE,
+    #     weight_decay=WEIGHT_DECAY,
+    #     device=device,
+    # )
+
+    # print("\nModel B: Morlet Conv → Transformer")
+    # modelB = ModelB_MorletConvThenTransformer(
+    #     data_config=data_config,
+    #     d_model=MODEL_D_MODEL,
+    #     n_classes=MODEL_NUM_CLASSES,
+    #     nhead=MODEL_NHEAD,
+    #     dim_ff=MODEL_DIM_FF,
+    #     nlayers=MODEL_NLAYERS,
+    #     dropout=MODEL_DROPOUT,
+    # )
+    # b_tr, b_va, b_best = train(
+    #     modelB,
+    #     train_loader,
+    #     val_loader,
+    #     epochs=TRAIN_EPOCHS,
+    #     lr=LEARNING_RATE,
+    #     weight_decay=WEIGHT_DECAY,
+    #     device=device,
+    # )
+    print("\nModel C: Spectrum Conv → Transformer")
+    modelC = ModelC_SpectralConvThenTransformer(
         data_config=data_config,
         d_model=MODEL_D_MODEL,
         n_classes=MODEL_NUM_CLASSES,
@@ -347,8 +432,8 @@ if __name__ == "__main__":
         nlayers=MODEL_NLAYERS,
         dropout=MODEL_DROPOUT,
     )
-    a_tr, a_va, a_best = train(
-        modelA,
+    c_tr, c_va, c_best = train(
+        modelC,
         train_loader,
         val_loader,
         epochs=TRAIN_EPOCHS,
@@ -357,35 +442,18 @@ if __name__ == "__main__":
         device=device,
     )
 
-    print("\nModel B: Conv → Transformer")
-    modelB = ModelB_ConvThenTransformer(
-        data_config=data_config,
-        d_model=MODEL_D_MODEL,
-        n_classes=MODEL_NUM_CLASSES,
-        nhead=MODEL_NHEAD,
-        dim_ff=MODEL_DIM_FF,
-        nlayers=MODEL_NLAYERS,
-        dropout=MODEL_DROPOUT,
-    )
-    b_tr, b_va, b_best = train(
-        modelB,
-        train_loader,
-        val_loader,
-        epochs=TRAIN_EPOCHS,
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY,
-        device=device,
-    )
-
-    a_test = accuracy(modelA, test_loader, device=device)
-    b_test = accuracy(modelB, test_loader, device=device)
-    print(f"\nTest accuracy — Model A (raw Transformer): {a_test:.3f}")
-    print(f"Test accuracy — Model B (conv → Transformer): {b_test:.3f}")
+    # a_test = accuracy(modelA, test_loader, device=device)
+    # b_test = accuracy(modelB, test_loader, device=device)
+    c_test = accuracy(modelC, test_loader, device=device)
+    # print(f"\nTest accuracy — Model A (raw Transformer): {a_test:.3f}")
+    # print(f"Test accuracy — Model B (morlet conv → Transformer): {b_test:.3f}")
+    print(f"Test accuracy — Model B (spectrum conv → Transformer): {c_test:.3f}")
 
     # Curves
     plt.figure()
-    plt.plot(a_tr, label="A: train_loss")
-    plt.plot(b_tr, label="B: train_loss")
+    # plt.plot(a_tr, label="A: train_loss")
+    # plt.plot(b_tr, label="B: train_loss")
+    plt.plot(c_tr, label="C: train_loss")
     plt.legend()
     plt.title("Training loss")
     plt.xlabel("epoch")
@@ -394,8 +462,9 @@ if __name__ == "__main__":
     plt.show()
 
     plt.figure()
-    plt.plot(a_va, label="A: val_acc")
-    plt.plot(b_va, label="B: val_acc")
+    # plt.plot(a_va, label="A: val_acc")
+    # plt.plot(b_va, label="B: val_acc")
+    plt.plot(c_va, label="C: val_acc")
     plt.legend()
     plt.title("Validation accuracy")
     plt.xlabel("epoch")
