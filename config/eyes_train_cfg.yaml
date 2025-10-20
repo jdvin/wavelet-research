@@ -27,6 +27,17 @@ ds_split_configs:
     epoch_length: 900
     sampling_rate: 180
   - split_name: train
+    source_base_path: "/Volumes/T7/datasets/EEG_MPILMBB_LEMON/EEG_Raw_BIDS_ID"
+    output_path: "./data/lemon_rs"
+    subjects: [10002]
+    sessions: [1]
+    channel_mask: None
+    data_source: lemon_rest
+    headset: lemon_62
+    sampling_rate: 250
+    epoch_duration_sec: 2.0
+    resample_sfreq: 250.0
+  - split_name: train
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/epoc"
     output_path: "./data/emotiv_alpha"
     subjects: [2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13]

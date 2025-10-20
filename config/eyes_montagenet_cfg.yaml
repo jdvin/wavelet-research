@@ -15,9 +15,11 @@ data_config:
     - 5
     - 14
     - 64
+    - 62
   sampling_rates:
     - 128
     - 180
+    - 250
   f_min: 0.5
   f_max: 40
   kernel_sec: 2.5

@@ -105,6 +105,71 @@ EPOC14_CHANNELS = [
 ]
 INSIGHT5_CHANNELS = ["AF3", "AF4", "T7", "T8", "Pz"]
 
+LEMON_CHANNELS = [
+    "Fp1",
+    "Fp2",
+    "F7",
+    "F3",
+    "Fz",
+    "F4",
+    "F8",
+    "FC5",
+    "FC1",
+    "FC2",
+    "FC6",
+    "T7",
+    "C3",
+    "Cz",
+    "C4",
+    "T8",
+    "VEOG",
+    "CP5",
+    "CP1",
+    "CP2",
+    "CP6",
+    "AFz",
+    "P7",
+    "P3",
+    "Pz",
+    "P4",
+    "P8",
+    "PO9",
+    "O1",
+    "Oz",
+    "O2",
+    "PO10",
+    "AF7",
+    "AF3",
+    "AF4",
+    "AF8",
+    "F5",
+    "F1",
+    "F2",
+    "F6",
+    "FT7",
+    "FC3",
+    "FC4",
+    "FT8",
+    "C5",
+    "C1",
+    "C2",
+    "C6",
+    "TP7",
+    "CP3",
+    "CPz",
+    "CP4",
+    "TP8",
+    "P5",
+    "P1",
+    "P2",
+    "P6",
+    "PO7",
+    "PO3",
+    "POz",
+    "PO4",
+    "PO8",
+]
+
 # Choose a standard montage that includes AF3/AF4/T7/T8/Pz, etc.
 # "standard_1020" works for these; you can also try "standard_1005" for denser sets.
 STANDARD_1020 = mne.channels.make_standard_montage("standard_1020").get_positions()[
@@ -116,6 +181,18 @@ INSIGHT5_CHANNEL_POSITIONS = torch.tensor(
 )
 EPOC14_CHANNEL_POSITIONS = torch.tensor(
     np.vstack([STANDARD_1020[ch] for ch in EPOC14_CHANNELS]), dtype=torch.float32
+)
+LEMON_CHANNEL_POSITIONS = torch.tensor(
+    np.vstack(
+        [
+            np.asarray(
+                STANDARD_1020.get(ch, np.zeros(3, dtype=np.float32)),
+                dtype=np.float32,
+            )
+            for ch in LEMON_CHANNELS
+        ]
+    ),
+    dtype=torch.float32,
 )
 
 
