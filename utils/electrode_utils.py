@@ -105,6 +105,42 @@ EPOC14_CHANNELS = [
 ]
 INSIGHT5_CHANNELS = ["AF3", "AF4", "T7", "T8", "Pz"]
 
+NEUROTECHS_CHANNELS = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"]
+
+RESTING_METHODS_CHANNELS = [
+    "Fp1",
+    "F3",
+    "F7",
+    "FT9",
+    "FC5",
+    "FC1",
+    "C3",
+    "T7",
+    "TP9",
+    "CP5",
+    "CP1",
+    "Pz",
+    "P3",
+    "P7",
+    "O1",
+    "Oz",
+    "O2",
+    "P4",
+    "P8",
+    "TP10",
+    "CP6",
+    "CP2",
+    "Cz",
+    "C4",
+    "T8",
+    "FT10",
+    "FC6",
+    "FC2",
+    "F4",
+    "F8",
+    "Fp2",
+]
+
 LEMON_CHANNELS = [
     "Fp1",
     "Fp2",
@@ -181,6 +217,12 @@ INSIGHT5_CHANNEL_POSITIONS = torch.tensor(
 )
 EPOC14_CHANNEL_POSITIONS = torch.tensor(
     np.vstack([STANDARD_1020[ch] for ch in EPOC14_CHANNELS]), dtype=torch.float32
+)
+NEUROTECHS_CHANNEL_POSITIONS = torch.tensor(
+    np.vstack([STANDARD_1020[ch] for ch in NEUROTECHS_CHANNELS]), dtype=torch.float32
+)
+RESTING_METHODS_CHANNEL_POSITIONS = torch.tensor(
+    np.vstack([STANDARD_1020[ch] for ch in RESTING_METHODS_CHANNELS]), dtype=torch.float32
 )
 LEMON_CHANNEL_POSITIONS = torch.tensor(
     np.vstack(

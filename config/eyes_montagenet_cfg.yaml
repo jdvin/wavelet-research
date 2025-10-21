@@ -18,7 +18,7 @@ data_config:
     - 62
   sampling_rates:
     - 128
-    - 180
+    - 160
     - 250
   f_min: 0.5
   f_max: 40

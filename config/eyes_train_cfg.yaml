@@ -6,6 +6,28 @@ ds_tasks_map:
     move_eyes_open: 0
     move_eyes_closed: 0
 ds_split_configs:
+  - split_name: lemon_resting_eyes_val 
+    source_base_path: "/teamspace/gcs_connections/neural-decode-data/EEG_MPILMBB_LEMON/EEG_Raw_BIDS_ID"
+    output_path: "./data/lemon_rs"
+    subjects: [10246, 10247, 10252, 10265, 10272, 10021, 10024, 10282, 10283, 10028, 10026, 10032, 10163, 10295, 10170, 10300, 10048, 10056, 10318, 10192, 10194, 10199, 10075, 10077, 10080, 10213, 10216, 10220, 10227, 10239]
+    sessions: [1]
+    channel_mask: None
+    data_source: lemon_rest
+    headset: lemon_62
+    sampling_rate: 250
+    epoch_length_sec: 5.0
+    resample_sfreq: 250.0
+  - split_name: train
+    source_base_path: "/teamspace/gcs_connections/neural-decode-data/EEG_MPILMBB_LEMON/EEG_Raw_BIDS_ID"
+    output_path: "./data/lemon_rs"
+    subjects: [10240, 10241, 10242, 10243, 10244, 10245, 10248, 10249, 10250, 10251, 10254, 10255, 10256, 10257, 10258, 10260, 10261, 10262, 10263, 10264, 10266, 10267, 10268, 10269, 10270, 10271, 10273, 10274, 10275, 10276, 10277, 10278, 10279, 10280, 10284, 10285, 10286, 10287, 10288, 10289, 10290, 10291, 10292, 10294, 10296, 10297, 10298, 10299, 10301, 10302, 10303, 10304, 10305, 10306, 10307, 10308, 10309, 10310, 10311, 10314, 10315, 10316, 10317, 10319, 10321, 10002, 10003, 10004, 10005, 10006, 10007, 10010, 10012, 10015, 10016, 10017, 10019, 10020, 10022, 10023, 10027, 10029, 10030, 10031, 10033, 10034, 10035, 10036, 10037, 10038, 10039, 10040, 10041, 10042, 10044, 10045, 10046, 10047, 10049, 10050, 10051, 10052, 10053, 10059, 10060, 10061, 10062, 10063, 10064, 10065, 10066, 10067, 10068, 10069, 10070, 10071, 10072, 10073, 10074, 10076, 10078, 10079, 10081, 10083, 10084, 10085, 10086, 10087, 10088, 10089, 10090, 10091, 10092, 10093, 10094, 10100, 10104, 10126, 10134, 10136, 10137, 10138, 10141, 10142, 10146, 10148, 10150, 10152, 10155, 10157, 10162, 10164, 10165, 10166, 10168, 10176, 10183, 10191, 10193, 10195, 10196, 10197, 10200, 10201, 10202, 10203, 10204, 10207, 10210, 10214, 10215, 10218, 10219, 10222, 10223, 10224, 10226, 10228, 10230, 10231, 10232, 10233, 10234, 10236, 10238]
+    sessions: [1]
+    channel_mask: None
+    data_source: lemon_rest
+    headset: lemon_62
+    sampling_rate: 250
+    epoch_length_sec: 5.0
+    resample_sfreq: 250.0
   - split_name: train
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/eeg-motor-movement-imagery"
     output_path: "./data/eeg_mmi"
@@ -14,8 +36,8 @@ ds_split_configs:
     channel_mask: None
     data_source: eeg_mmi
     headset: physionet_64
-    epoch_length: 900
-    sampling_rate: 180
+    epoch_length_sec: 5.0
+    sampling_rate: 160
   - split_name: eeg_mmi_eyes_val
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/eeg-motor-movement-imagery"
     output_path: "./data/eeg_mmi"
@@ -24,19 +46,8 @@ ds_split_configs:
     channel_mask: None
     data_source: eeg_mmi
     headset: physionet_64
-    epoch_length: 900
-    sampling_rate: 180
-  - split_name: train
-    source_base_path: "/Volumes/T7/datasets/EEG_MPILMBB_LEMON/EEG_Raw_BIDS_ID"
-    output_path: "./data/lemon_rs"
-    subjects: [10002]
-    sessions: [1]
-    channel_mask: None
-    data_source: lemon_rest
-    headset: lemon_62
-    sampling_rate: 250
-    epoch_duration_sec: 2.0
-    resample_sfreq: 250.0
+    epoch_length_sec: 5.0
+    sampling_rate: 160
   - split_name: train
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/epoc"
     output_path: "./data/emotiv_alpha"
@@ -45,7 +56,7 @@ ds_split_configs:
     channel_mask: None
     data_source: emotive_alpha
     headset: emotiv_epoc_14
-    epoch_length: 640
+    epoch_length_sec: 5.0
     sampling_rate: 128
   - split_name: emotiv_alpha_eyes_val
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/epoc"
@@ -55,7 +66,7 @@ ds_split_configs:
     channel_mask: None
     data_source: emotive_alpha
     headset: emotiv_epoc_14
-    epoch_length: 640
+    epoch_length_sec: 5.0
     sampling_rate: 128
   - split_name: train
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
@@ -65,7 +76,7 @@ ds_split_configs:
     channel_mask: None
     data_source: emotive_alpha
     headset: emotiv_insight_5
-    epoch_length: 640
+    epoch_length_sec: 5.0
     sampling_rate: 128
   - split_name: emotiv_alpha_eyes_val
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
@@ -75,9 +86,9 @@ ds_split_configs:
     channel_mask: None
     data_source: emotive_alpha
     headset: emotiv_insight_5
-    epoch_length: 640
+    epoch_length_sec: 5.0
     sampling_rate: 128
-num_epochs: 40
+num_epochs: 10
 batch_size: 64
 train_micro_batch_size: 8
 val_micro_batch_size: 64

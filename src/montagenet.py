@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 import math
-from typing import Any, Iterable
+from typing import Any
 from functools import partial
 import torch
 from torch import einsum as einsum
@@ -16,7 +16,6 @@ from src.components.focal_loss import FocalLoss
 from src.components.norm import RMSNorm
 from src.components.attention import MultiHeadAttention
 from src.components.activations import GEGLU
-from utils.electrode_utils import physionet_64_montage
 
 
 class TemporalAttentionBlock(nn.Module):
