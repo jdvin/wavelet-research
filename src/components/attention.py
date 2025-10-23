@@ -4,6 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 from .rope import RotaryEmbedding
 from .pos import RelativePositionBias
+from torch.backends.cuda import sdp_kernel
 
 
 class MultiHeadAttention(torch.nn.Module):
@@ -80,14 +81,20 @@ class MultiHeadAttention(torch.nn.Module):
             attention_mask: Tensor[float] (B, 1, T_q, T_kv)
         """
         if self.flash and not self.qk_norm:
-            y = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=attention_mask,
-                dropout_p=self.dropout if self.training else 0,
-                scale=self.scale,
-            )
+            with sdp_kernel(
+                enable_math=True, enable_flash=False, enable_mem_efficient=False
+            ):
+                y = F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+                )
+            # y = F.scaled_dot_product_attention(
+            #     q,
+            #     k,
+            #     v,
+            #     attn_mask=attention_mask,
+            #     dropout_p=self.dropout if self.training else 0,
+            #     scale=self.scale,
+            # )
 
         else:
             # (B, nhead, T_q, D_head) x (B, nhead, D_head, T_kv) -> (B, nhead, T_q, T_kv).

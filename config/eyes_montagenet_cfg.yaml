@@ -13,13 +13,16 @@ tasks:
 data_config:
   channel_counts:
     - 5
+    - 8
     - 14
+    - 31
     - 64
     - 62
   sampling_rates:
     - 128
     - 160
     - 250
+    - 500
   f_min: 0.5
   f_max: 40
   kernel_sec: 2.5

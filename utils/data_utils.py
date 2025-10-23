@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+import hashlib
 import os
 from typing import Callable, Any, Sequence
 import json
@@ -34,6 +35,7 @@ from utils.electrode_utils import (
     LEMON_CHANNEL_POSITIONS,
     NEUROTECHS_CHANNELS,
     NEUROTECHS_CHANNEL_POSITIONS,
+    PHYSIONET_64_CHANNELS,
     RESTING_METHODS_CHANNELS,
     RESTING_METHODS_CHANNEL_POSITIONS,
     PHYSIONET_64_CHANNEL_POSITIONS,
@@ -119,6 +121,13 @@ ELECTRODE_ORDER = np.array(
 )
 # Task AND label dtype. 11 character string.
 TASK_LABEL_DTYPE = np.dtype("<U32")
+
+
+def _hash_identifiers(values: Sequence[str]) -> str:
+    if not values:
+        return "none"
+    joined = "||".join(sorted(values))
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16]
 
 
 def extract_eeg_eye_net_ds(
@@ -469,30 +478,30 @@ def get_things_100ms_collate_fn(
     return collate_fn
 
 
-class EEGMMITask(Enum):
+class Task(Enum):
     BASELINE_EYES_OPEN = "move_eyes_open"
     BASELINE_EYES_CLOSED = "move_eyes_closed"
-    TASK_1 = "move_left_right_fist"
-    TASK_2 = "imag_left_right_fist"
-    TASK_3 = "move_fist_feet"
-    TASK_4 = "imag_fist_feet"
+    MOVE_LEFT_RIGHT_FIST = "move_left_right_fist"
+    IMAGE_LEFT_RIGHT_FIST = "imag_left_right_fist"
+    MOVE_FIST_FEET = "move_fist_feet"
+    IMAG_FIST_FEET = "imag_fist_feet"
 
 
-SESSION_TO_TASK = {
-    1: EEGMMITask.BASELINE_EYES_OPEN,
-    2: EEGMMITask.BASELINE_EYES_CLOSED,
-    3: EEGMMITask.TASK_1,
-    4: EEGMMITask.TASK_2,
-    5: EEGMMITask.TASK_3,
-    6: EEGMMITask.TASK_4,
-    7: EEGMMITask.TASK_1,
-    8: EEGMMITask.TASK_2,
-    9: EEGMMITask.TASK_3,
-    10: EEGMMITask.TASK_4,
-    11: EEGMMITask.TASK_1,
-    12: EEGMMITask.TASK_2,
-    13: EEGMMITask.TASK_3,
-    14: EEGMMITask.TASK_4,
+EEG_MMI_SESSION_TO_TASK = {
+    "R01": Task.BASELINE_EYES_OPEN,
+    "R02": Task.BASELINE_EYES_CLOSED,
+    "R03": Task.MOVE_LEFT_RIGHT_FIST,
+    "R04": Task.IMAGE_LEFT_RIGHT_FIST,
+    "R05": Task.MOVE_FIST_FEET,
+    "R06": Task.IMAG_FIST_FEET,
+    "R07": Task.MOVE_LEFT_RIGHT_FIST,
+    "R08": Task.IMAGE_LEFT_RIGHT_FIST,
+    "R09": Task.MOVE_FIST_FEET,
+    "R10": Task.IMAG_FIST_FEET,
+    "R11": Task.MOVE_LEFT_RIGHT_FIST,
+    "R12": Task.IMAGE_LEFT_RIGHT_FIST,
+    "R13": Task.MOVE_FIST_FEET,
+    "R14": Task.IMAG_FIST_FEET,
 }
 
 
@@ -510,69 +519,69 @@ class Annotation(Enum):
     IMAG_BOTH_FEET = "imag_both_feet"
 
 
-ANNOTATION_CODE_MAP: dict[int, dict[str, Annotation]] = {
-    1: {
+EEG_MMI_SESSION_ANNOTATION_CODE_MAP: dict[str, dict[str, Annotation]] = {
+    "R01": {
         "T0": Annotation.EYES_OPEN,
     },
-    2: {
+    "R02": {
         "T0": Annotation.EYES_CLOSED,
     },
-    3: {
+    "R03": {
         "T0": Annotation.REST,
         "T1": Annotation.MOVE_LEFT_FIST,
         "T2": Annotation.MOVE_RIGHT_FIST,
     },
-    4: {
+    "R04": {
         "T0": Annotation.REST,
         "T1": Annotation.IMAG_LEFT_FIST,
         "T2": Annotation.IMAG_RIGHT_FIST,
     },
-    5: {
+    "R05": {
         "T0": Annotation.REST,
         "T1": Annotation.MOVE_BOTH_FIST,
         "T2": Annotation.MOVE_BOTH_FEET,
     },
-    6: {
+    "R06": {
         "T0": Annotation.REST,
         "T1": Annotation.IMAG_BOTH_FIST,
         "T2": Annotation.IMAG_BOTH_FEET,
     },
-    7: {
+    "R07": {
         "T0": Annotation.REST,
         "T1": Annotation.MOVE_LEFT_FIST,
         "T2": Annotation.MOVE_RIGHT_FIST,
     },
-    8: {
+    "R08": {
         "T0": Annotation.REST,
         "T1": Annotation.IMAG_LEFT_FIST,
         "T2": Annotation.IMAG_RIGHT_FIST,
     },
-    9: {
+    "R09": {
         "T0": Annotation.REST,
         "T1": Annotation.MOVE_BOTH_FIST,
         "T2": Annotation.MOVE_BOTH_FEET,
     },
-    10: {
+    "R10": {
         "T0": Annotation.REST,
         "T1": Annotation.IMAG_BOTH_FIST,
         "T2": Annotation.IMAG_BOTH_FEET,
     },
-    11: {
+    "R11": {
         "T0": Annotation.REST,
         "T1": Annotation.MOVE_LEFT_FIST,
         "T2": Annotation.MOVE_RIGHT_FIST,
     },
-    12: {
+    "R12": {
         "T0": Annotation.REST,
         "T1": Annotation.IMAG_LEFT_FIST,
         "T2": Annotation.IMAG_RIGHT_FIST,
     },
-    13: {
+    "R13": {
         "T0": Annotation.REST,
         "T1": Annotation.MOVE_BOTH_FIST,
         "T2": Annotation.MOVE_BOTH_FEET,
     },
-    14: {
+    "R14": {
         "T0": Annotation.REST,
         "T1": Annotation.IMAG_BOTH_FIST,
         "T2": Annotation.IMAG_BOTH_FEET,
@@ -624,6 +633,7 @@ HEADSET_TO_CHANNELS: dict[Headset, list[str]] = {
     Headset.LEMON_62: LEMON_CHANNELS,
     Headset.UNICORN_HYBRID_BLACK_8: NEUROTECHS_CHANNELS,
     Headset.BRAIN_ACTICHAMP_31: RESTING_METHODS_CHANNELS,
+    Headset.PHYSIONET_64: PHYSIONET_64_CHANNELS,
 }
 
 
@@ -658,8 +668,8 @@ class DataSplit:
     Creates a unique code for the split."""
 
     split_name: str
-    subjects: list[int]
-    sessions: list[int]
+    subjects: list[str]
+    sessions: list[str]
     source_base_path: str
     output_path: str
     sampling_rate: int
@@ -681,21 +691,36 @@ class DataSplit:
             self.channel_mask_config, dict
         ):
             self.channel_mask_config = ChannelMaskConfig(**self.channel_mask_config)
-        # breakpoint()
-        assert (
-            len(self.subjects) <= self.max_subjects
-        ), f"max_subjects={self.max_subjects}, subjects={len(self.subjects)}"
-        assert (
-            len(self.sessions) <= self.max_sessions
-        ), f"max_sessions={self.max_sessions}, sessions={len(self.sessions)}"
+
+        if not all(isinstance(subject, str) for subject in self.subjects):
+            raise TypeError(
+                "DataSplit subjects must be strings. Update configuration to provide normalized identifiers."
+            )
+        # Normalize whitespace without altering identifier semantics.
+        self.subjects = [subject.strip() for subject in self.subjects]
+
+        # Normalize session identifiers to strings.
+        if not isinstance(self.sessions, list):
+            raise TypeError("sessions must be provided as a list.")
+        self.sessions = [str(session).strip() for session in self.sessions]
+
+        if self.max_subjects:
+            assert (
+                len(self.subjects) <= self.max_subjects
+            ), f"max_subjects={self.max_subjects}, subjects={len(self.subjects)}"
+        if self.max_sessions:
+            assert (
+                len(self.sessions) <= self.max_sessions
+            ), f"max_sessions={self.max_sessions}, sessions={len(self.sessions)}"
 
     def code(self) -> str:
-        # Hack bc subjects and sessions are 1-indexed.
-        subjects_onehot = np.zeros(self.max_subjects + 1, dtype=int)
-        subjects_onehot[self.subjects] = 1
-        sessions_onehot = np.zeros(self.max_sessions + 1, dtype=int)
-        sessions_onehot[self.sessions] = 1
-        return f"ds-{self.data_source.value}--hs-{self.headset.value}--sub-{''.join(str(s) for s in subjects_onehot.tolist())}--sess-{''.join(str(s) for s in sessions_onehot.tolist())}"
+        subjects_key = _hash_identifiers(self.subjects)
+        session_tokens = [str(session).strip() for session in self.sessions]
+        sessions_key = _hash_identifiers(session_tokens)
+        return (
+            f"ds-{self.data_source.value}--hs-{self.headset.value}"
+            f"--sub-{subjects_key}--sess-{sessions_key}"
+        )
 
     def __str__(self) -> str:
         return f"""DataSplit(
@@ -715,7 +740,25 @@ class EmotivAlphaDataSplit(DataSplit):
 
     def __post_init__(self) -> None:
         if not self.sessions:
-            self.sessions = [1]
+            self.sessions = ["1"]
+        normalized_sessions: list[str] = []
+        for session in self.sessions:
+            session_str = str(session).strip()
+            if not session_str:
+                session_str = "1"
+            normalized_sessions.append(session_str)
+        self.sessions = normalized_sessions
+        normalized_subjects: list[str] = []
+        for subject in self.subjects:
+            if not isinstance(subject, str):
+                raise ValueError("Emotiv Alpha subjects must be strings like 'S001'.")
+            subject_code = subject.strip().upper()
+            if not subject_code.startswith("S"):
+                subject_code = f"S{subject_code}"
+            if not subject_code[1:].isdigit():
+                raise ValueError(f"Invalid Emotiv Alpha subject identifier: {subject}.")
+            normalized_subjects.append(f"S{int(subject_code[1:]):03d}")
+        self.subjects = normalized_subjects
         super().__post_init__()
 
 
@@ -741,19 +784,35 @@ class LemonRestingStateDataSplit(DataSplit):
 
     def __post_init__(self) -> None:
         if not self.sessions:
-            self.sessions = [1]
+            self.sessions = ["1"]
+        normalized_sessions: list[str] = []
+        for session in self.sessions:
+            session_str = str(session).strip().lower()
+            if session_str.isdigit():
+                session_str = f"ses-{int(session_str):02d}"
+            elif not session_str.startswith("ses-"):
+                session_str = f"ses-{session_str}"
+            normalized_sessions.append(session_str)
+        self.sessions = normalized_sessions
         if self.max_subjects == 0 and self.subjects:
-            self.max_subjects = max(self.subjects)
+            self.max_subjects = len(self.subjects)
+        normalized_subjects: list[str] = []
+        for subject in self.subjects:
+            if not isinstance(subject, str):
+                raise ValueError(
+                    "LEMON resting-state subjects must be strings like 'sub-010002'."
+                )
+            subj = subject.strip().lower()
+            if not subj.startswith("sub-"):
+                subj = f"sub-{subj}"
+            normalized_subjects.append(subj)
+        self.subjects = normalized_subjects
         super().__post_init__()
         if self.resample_sfreq is None and self.sampling_rate is not None:
             self.resample_sfreq = float(self.sampling_rate)
 
-    def code(self) -> str:
-        subjects_str = "-".join(f"{subject:06d}" for subject in sorted(self.subjects))
-        return f"ds-{self.data_source.value}--sub-{subjects_str}"
-
     def subject_ids(self) -> list[str]:
-        return [f"sub-{subject:06d}" for subject in self.subjects]
+        return list(self.subjects)
 
 
 @dataclass
@@ -769,26 +828,31 @@ class NeurotechsEyesDataSplit(DataSplit):
 
     def __post_init__(self) -> None:
         if not self.sessions:
-            self.sessions = [1, 2]
-        super().__post_init__()
-        if not all(isinstance(subject, str) for subject in self.subjects):
-            raise ValueError(
-                "Neurotechs splits require subject identifiers as strings like 'sub-01c'."
-            )
-
-    def subject_ids(self) -> list[str]:
-        subject_ids: list[str] = []
+            self.sessions = ["1", "2"]
+        normalized_sessions: list[str] = []
+        for session in self.sessions:
+            session_str = str(session).strip().lower()
+            if session_str.isdigit():
+                session_str = f"ses-{int(session_str):02d}"
+            elif not session_str.startswith("ses-"):
+                session_str = f"ses-{session_str}"
+            normalized_sessions.append(session_str)
+        self.sessions = normalized_sessions
+        normalized_subjects: list[str] = []
         for subject in self.subjects:
-            subj = subject.lower()
+            if not isinstance(subject, str):
+                raise ValueError(
+                    "Neurotechs splits require subject identifiers as strings like 'sub-01c'."
+                )
+            subj = subject.strip().lower()
             if not subj.startswith("sub-"):
                 subj = f"sub-{subj}"
-            subject_ids.append(subj)
-        return subject_ids
+            normalized_subjects.append(subj)
+        self.subjects = normalized_subjects
+        super().__post_init__()
 
-    def code(self) -> str:
-        subjects_str = "-".join(s.replace("sub-", "") for s in self.subject_ids())
-        sessions_str = "-".join(f"{int(session):02d}" for session in self.sessions)
-        return f"ds-{self.data_source.value}--sub-{subjects_str}--sess-{sessions_str}"
+    def subject_ids(self) -> list[str]:
+        return list(self.subjects)
 
 
 @dataclass
@@ -822,11 +886,18 @@ class RestingEEGMethodsDataSplit(DataSplit):
                     "Resting EEG methods sessions must be provided as strings like 'pre' or 'ses-pre'."
                 )
         self.sessions = normalized_sessions
+        normalized_subjects: list[str] = []
+        for subject in self.subjects:
+            if not isinstance(subject, str):
+                raise ValueError(
+                    "Resting EEG methods subjects must be strings like 'sub-01'."
+                )
+            subj = subject.strip().lower()
+            if not subj.startswith("sub-"):
+                subj = f"sub-{subj}"
+            normalized_subjects.append(subj)
+        self.subjects = normalized_subjects
         super().__post_init__()
-        if not all(isinstance(subject, int) for subject in self.subjects):
-            raise ValueError(
-                "Resting EEG methods subjects must be integers matching 'sub-XX' identifiers."
-            )
         if len(self.block_sequence) == 0:
             raise ValueError("block_sequence must contain at least one entry.")
         normalized_blocks: list[str] = []
@@ -840,12 +911,7 @@ class RestingEEGMethodsDataSplit(DataSplit):
         self.block_sequence = tuple(normalized_blocks)
 
     def subject_ids(self) -> list[str]:
-        return [f"sub-{subject:02d}" for subject in self.subjects]
-
-    def code(self) -> str:
-        subjects_str = "-".join(f"{subject:02d}" for subject in sorted(self.subjects))
-        sessions_str = "-".join(self.sessions)
-        return f"ds-{self.data_source.value}--sub-{subjects_str}--sess-{sessions_str}"
+        return list(self.subjects)
 
 
 @dataclass
@@ -856,6 +922,30 @@ class EEGMMIDataSplit(DataSplit):
     max_sessions: int = 14
 
     def __post_init__(self) -> None:
+        normalized_subjects: list[str] = []
+        for subject in self.subjects:
+            if not isinstance(subject, str):
+                raise ValueError("EEG MMI subjects must be strings like 'S001'.")
+            subject_code = subject.strip().upper()
+            if not subject_code.startswith("S"):
+                subject_code = f"S{subject_code}"
+            if not subject_code[1:].isdigit():
+                raise ValueError(f"Invalid EEG MMI subject identifier: {subject}.")
+            normalized_subjects.append(f"S{int(subject_code[1:]):03d}")
+        self.subjects = normalized_subjects
+
+        normalized_sessions: list[str] = []
+        for session in self.sessions:
+            if not isinstance(session, str):
+                raise ValueError("EEG MMI sessions must be strings like 'R01'.")
+            session_code = session.strip().upper()
+            if not session_code.startswith("R"):
+                session_code = f"R{session_code}"
+            if not session_code[1:].isdigit():
+                raise ValueError(f"Invalid EEG MMI session identifier: {session}.")
+            normalized_sessions.append(f"R{int(session_code[1:]):02d}")
+        self.sessions = normalized_sessions
+
         super().__post_init__()
         assert self.headset == Headset.PHYSIONET_64
         assert self.data_source == DataSource.EEG_MMI
@@ -864,8 +954,8 @@ class EEGMMIDataSplit(DataSplit):
 def extract_eeg_mmi_session_data(
     base_path: str,
     output_path: str,
-    subject: int,
-    session: int,
+    subject: str,
+    session: str,
     ignore_cache: bool = False,
     epoch_length_sec: float | None = None,
     sampling_rate: int | None = None,
@@ -878,13 +968,17 @@ def extract_eeg_mmi_session_data(
         T: number of time samples.
     containing EEG data and a memmap of shape (N_E) containing the annotations
     """
-    subject_str = "S" + str(subject).zfill(3)
-    session_str = "R" + str(session).zfill(2)
+    subject_code = subject.strip().upper()
+    session_code = session.strip().upper()
+    if not subject_code.startswith("S"):
+        raise ValueError(f"EEG MMI subject identifiers must start with 'S': {subject}.")
+    if not session_code.startswith("R"):
+        raise ValueError(f"EEG MMI session identifiers must start with 'R': {session}.")
     output_eeg_path = os.path.join(
-        base_path, subject_str, f"{subject_str}{session_str}_eeg.npy"
+        base_path, subject_code, f"{subject_code}{session_code}_eeg.npy"
     )
     output_labels_path = os.path.join(
-        base_path, subject_str, f"{subject_str}{session_str}_labels.npy"
+        base_path, subject_code, f"{subject_code}{session_code}_labels.npy"
     )
     cached = (
         os.path.exists(output_eeg_path)
@@ -892,7 +986,7 @@ def extract_eeg_mmi_session_data(
         and not ignore_cache
     )
     source_path = os.path.join(
-        base_path, subject_str, f"{subject_str}{session_str}.edf"
+        base_path, subject_code, f"{subject_code}{session_code}.edf"
     )
     data = mne.io.read_raw_edf(source_path)
     data_sfreq = float(data.info["sfreq"])
@@ -901,7 +995,7 @@ def extract_eeg_mmi_session_data(
     else:
         if not np.isclose(sampling_rate, data_sfreq):
             raise ValueError(
-                f"Sampling rate mismatch for {subject_str}{session_str}: "
+                f"Sampling rate mismatch for {subject_code}{session_code}: "
                 f"expected {sampling_rate}, found {data_sfreq}."
             )
     if epoch_length_sec is None:
@@ -948,13 +1042,13 @@ def extract_eeg_mmi_session_data(
     else:
         max_event_duration = default_event_length_samples
     session_eeg = np.memmap(
-        filename=os.path.join(output_path, f"{subject_str}{session_str}_eeg.npy"),
+        filename=os.path.join(output_path, f"{subject_code}{session_code}_eeg.npy"),
         mode="r" if cached else "w+",
         shape=(len(events), num_channels, max_event_duration),
         dtype=eeg_data.dtype,
     )
     session_labels = np.memmap(
-        filename=os.path.join(output_path, f"{subject_str}{session_str}_labels.npy"),
+        filename=os.path.join(output_path, f"{subject_code}{session_code}_labels.npy"),
         mode="r" if cached else "w+",
         shape=(len(events), 2),
         dtype=TASK_LABEL_DTYPE,
@@ -975,8 +1069,10 @@ def extract_eeg_mmi_session_data(
         event_stop = next_event[0]
         event_duration = event_stop - event_start
         annotation_code = labels_to_annotations[current_event[2]]
-        task = SESSION_TO_TASK[session].value
-        annotation = ANNOTATION_CODE_MAP[session][annotation_code.item()].value
+        task = EEG_MMI_SESSION_TO_TASK[session].value
+        annotation = EEG_MMI_SESSION_ANNOTATION_CODE_MAP[session][
+            annotation_code.item()
+        ].value
         session_eeg[i, :, 0:event_duration] = eeg_data[:, event_start:event_stop]
         session_labels[i, :] = [task, annotation]
 
@@ -1050,11 +1146,23 @@ def extract_eeg_mmi_split(
 
 def _discover_emotiv_recordings(
     base_path: str | Path,
-    subjects: list[int],
+    subjects: list[str],
     expected_headset: Headset,
 ) -> list[EmotivFileBundle]:
     base = Path(base_path)
-    subject_filter = set(subjects) if subjects else None
+    subject_filter: set[str] | None = None
+    if subjects:
+        normalized: set[str] = set()
+        for subject in subjects:
+            if not isinstance(subject, str):
+                raise ValueError("Emotiv Alpha subjects must be strings like 'S001'.")
+            subject_code = subject.strip().upper()
+            if not subject_code.startswith("S"):
+                subject_code = f"S{subject_code}"
+            if not subject_code[1:].isdigit():
+                raise ValueError(f"Invalid Emotiv Alpha subject identifier: {subject}.")
+            normalized.add(f"S{int(subject_code[1:]):03d}")
+        subject_filter = normalized
     recordings: list[EmotivFileBundle] = []
 
     for csv_path in base.rglob("Alpha Supression_*_S???.csv"):
@@ -1069,13 +1177,14 @@ def _discover_emotiv_recordings(
         if headset is None or headset != expected_headset:
             continue
         subject_id = int(match.group("subject"))
-        if subject_filter is not None and subject_id not in subject_filter:
+        subject_code = f"S{subject_id:03d}"
+        if subject_filter is not None and subject_code not in subject_filter:
             continue
         root = match.group("root")
         marker_name = f"{root}_markers_S{subject_id:03d}.csv"
         marker_path = csv_path.with_name(marker_name)
         if not marker_path.exists():
-            logger.warning("Missing marker file %s for %s", marker_name, csv_path)
+            logger.warning(f"Missing marker file {marker_name} for {csv_path}")
             continue
         recordings.append(
             EmotivFileBundle(
@@ -1179,10 +1288,8 @@ def _write_emotiv_recording_data(
     timestamps = df.pop("Timestamp").to_numpy(dtype=np.float64)
     if timestamps.shape[0] != recording.sample_count:
         logger.warning(
-            "Timestamp count mismatch for %s (expected %s, got %s)",
-            recording.bundle.data_path,
-            recording.sample_count,
-            timestamps.shape[0],
+            f"Timestamp count mismatch for {recording.bundle.data_path} "
+            f"(expected {recording.sample_count}, got {timestamps.shape[0]})"
         )
 
     signals = np.zeros((len(channels), timestamps.shape[0]), dtype=np.float32)
@@ -1251,7 +1358,7 @@ def extract_emotiv_alpha_suppression_split(
         recording = _build_emotiv_recording_info(bundle, epoch_length_samples)
         epoch_count = sum(event.num_epochs for event in recording.events)
         if epoch_count == 0:
-            logger.warning("No eyes-open/closed epochs found in %s", bundle.data_path)
+            logger.warning(f"No eyes-open/closed epochs found in {bundle.data_path}")
             continue
         recordings.append(recording)
         total_epochs += epoch_count
@@ -1356,11 +1463,11 @@ def extract_neurotechs_eyes_split(
     recordings: list[tuple[str, str, Path]] = []
     for subject_id in split.subject_ids():
         for session in split.sessions:
-            session_str = f"ses-{int(session)}"
+            session_str = session.lower()
             eeg_dir = base_path / subject_id / session_str / "eeg"
             if not eeg_dir.exists():
                 logger.warning(
-                    "Skipping %s %s: EEG directory not found.", subject_id, session_str
+                    f"Skipping {subject_id} {session_str}: EEG directory not found: {eeg_dir}."
                 )
                 continue
             pattern = f"{subject_id}_{session_str}_task-{split.task_name}_eeg.set"
@@ -1369,7 +1476,7 @@ def extract_neurotechs_eyes_split(
                 eeg_files = sorted(eeg_dir.glob("*.set"))
             if not eeg_files:
                 logger.warning(
-                    "Skipping %s %s: no .set file found.", subject_id, session_str
+                    f"Skipping {subject_id} {session_str}: no .set file found."
                 )
                 continue
             recordings.append((subject_id, session_str, eeg_files[0]))
@@ -1411,11 +1518,8 @@ def extract_neurotechs_eyes_split(
         baseline_stop = baseline_start + closed_samples + open_samples
         if baseline_stop > data.shape[1]:
             logger.warning(
-                "Skipping %s %s: baseline window (%s samples) exceeds recording length (%s).",
-                subject_id,
-                session_str,
-                baseline_stop,
-                data.shape[1],
+                f"Skipping {subject_id} {session_str}: baseline window "
+                f"({baseline_stop} samples) exceeds recording length ({data.shape[1]})."
             )
             raw.close()
             continue
@@ -1458,10 +1562,8 @@ def extract_neurotechs_eyes_split(
 
     if cursor != total_expected:
         logger.info(
-            "Extracted %s Neurotechs segments (expected %s); "
-            "some recordings may have been skipped.",
-            cursor,
-            total_expected,
+            f"Extracted {cursor} Neurotechs segments (expected {total_expected}); "
+            "some recordings may have been skipped."
         )
 
     eeg_final = eeg_buffer[:cursor]
@@ -1540,7 +1642,7 @@ def extract_resting_methods_split(
             eeg_dir = base_path / subject_id / session / "eeg"
             if not eeg_dir.exists():
                 logger.warning(
-                    "Skipping %s %s: EEG directory not found.", subject_id, session
+                    f"Skipping {subject_id} {session}: EEG directory not found: {eeg_dir}."
                 )
                 continue
             pattern = f"{subject_id}_{session}_task-{split.task_name}_eeg.vhdr"
@@ -1548,9 +1650,7 @@ def extract_resting_methods_split(
             if not vhdr_files:
                 vhdr_files = sorted(eeg_dir.glob("*.vhdr"))
             if not vhdr_files:
-                logger.warning(
-                    "Skipping %s %s: no .vhdr file found.", subject_id, session
-                )
+                logger.warning(f"Skipping {subject_id} {session}: no .vhdr file found.")
                 continue
             recordings.append((subject_id, session, vhdr_files[0]))
 
@@ -1596,10 +1696,8 @@ def extract_resting_methods_split(
             block_end = block_start + block_samples
             if block_start >= data.shape[1]:
                 logger.warning(
-                    "Block %s for %s %s starts beyond data length; skipping remaining blocks.",
-                    block_name,
-                    subject_id,
-                    session,
+                    f"Block {block_name} for {subject_id} {session} starts beyond data length; "
+                    "skipping remaining blocks."
                 )
                 break
             block_end = min(block_end, data.shape[1])
@@ -1607,10 +1705,8 @@ def extract_resting_methods_split(
             usable_samples = (available_samples // epoch_samples) * epoch_samples
             if usable_samples < epoch_samples:
                 logger.warning(
-                    "Block %s for %s %s has insufficient samples after trimming; skipping.",
-                    block_name,
-                    subject_id,
-                    session,
+                    f"Block {block_name} for {subject_id} {session} has insufficient samples after trimming; "
+                    "skipping."
                 )
                 continue
             block_data = data[:, block_start : block_start + usable_samples]
@@ -1710,6 +1806,50 @@ def extract_lemon_resting_state(
         "Stimulus/S210": ("move_eyes_closed", "base_eyes_closed"),
     }
 
+    first_native_sfreq: float | None = None
+    for candidate_dir in lemon_subject_dirs:
+        try:
+            preview_vhdr = find_vhdr(candidate_dir)
+        except FileNotFoundError:
+            continue
+        preview_raw = mne.io.read_raw_brainvision(
+            preview_vhdr.as_posix(), preload=False, verbose=False
+        )
+        first_native_sfreq = float(preview_raw.info["sfreq"])
+        preview_raw.close()
+        break
+
+    if first_native_sfreq is None:
+        raise ValueError("No usable LEMON recordings were discovered.")
+
+    target_sfreq_guess = (
+        float(split.resample_sfreq)
+        if split.resample_sfreq is not None
+        else first_native_sfreq
+    )
+    epoch_suffix = f"{int(split.epoch_length_sec * 1000)}ms"
+    sr_suffix = f"{int(target_sfreq_guess)}hz"
+    subject_suffix = (
+        f"{len(lemon_subject_dirs)}sub"
+        if split.subjects is not None
+        else "allsubjects"
+    )
+    cache_prefix = f"lemon_{subject_suffix}_{sr_suffix}_{epoch_suffix}"
+
+    eeg_output_path = out_path / f"{cache_prefix}_eeg.npy"
+    labels_output_path = out_path / f"{cache_prefix}_labels.npy"
+    channels_output_path = out_path / f"{cache_prefix}_channels.json"
+
+    if (
+        not ignore_cache
+        and eeg_output_path.exists()
+        and labels_output_path.exists()
+    ):
+        logger.info(f"Using cached LEMON extraction at {eeg_output_path}")
+        return np.load(eeg_output_path, mmap_mode="r", allow_pickle=True), np.load(
+            labels_output_path, mmap_mode="r", allow_pickle=True
+        )
+
     subject_info: list[dict[str, Any]] = []
     reference_channels: list[str] | None = None
     native_sfreq: float | None = None
@@ -1775,10 +1915,9 @@ def extract_lemon_resting_state(
             desc for desc, count in per_event_counts.items() if count == 0
         ]
         if missing_events:
+            missing_summary = ", ".join(sorted(missing_events))
             logger.warning(
-                "Skipping %s; missing required events: %s",
-                subject_dir.name,
-                ", ".join(sorted(missing_events)),
+                f"Skipping {subject_dir.name}; missing required events: {missing_summary}"
             )
             continue
 
@@ -1808,6 +1947,7 @@ def extract_lemon_resting_state(
     target_sfreq = float(split.resample_sfreq) if split.resample_sfreq else native_sfreq
     if target_sfreq <= 0:
         raise ValueError("resample_sfreq must be positive if provided.")
+    sr_suffix = f"{int(target_sfreq)}hz"
 
     epoch_samples = int(round(target_epoch_duration_sec * target_sfreq))
     if not np.isclose(epoch_samples, target_epoch_duration_sec * target_sfreq):
@@ -1815,19 +1955,21 @@ def extract_lemon_resting_state(
             "epoch_duration_sec * sampling_rate must be close to an integer number of samples."
         )
 
+    # Update cache prefix with actual subject count when available.
     subject_suffix = (
         f"{len(subject_info)}sub" if split.subjects is not None else "allsubjects"
     )
-    sr_suffix = f"{int(target_sfreq)}hz"
-    epoch_suffix = f"{int(target_epoch_duration_sec * 1000)}ms"
     cache_prefix = f"lemon_{subject_suffix}_{sr_suffix}_{epoch_suffix}"
-
     eeg_output_path = out_path / f"{cache_prefix}_eeg.npy"
     labels_output_path = out_path / f"{cache_prefix}_labels.npy"
     channels_output_path = out_path / f"{cache_prefix}_channels.json"
 
-    if eeg_output_path.exists() and labels_output_path.exists() and not ignore_cache:
-        logger.info("Using cached LEMON extraction at %s", eeg_output_path)
+    if (
+        not ignore_cache
+        and eeg_output_path.exists()
+        and labels_output_path.exists()
+    ):
+        logger.info(f"Using cached LEMON extraction at {eeg_output_path}")
         return np.load(eeg_output_path, mmap_mode="r", allow_pickle=True), np.load(
             labels_output_path, mmap_mode="r", allow_pickle=True
         )
@@ -1889,16 +2031,15 @@ def extract_lemon_resting_state(
                 valid_onsets.append((onset, desc))
 
         if not valid_onsets:
-            logger.warning("Skipping %s; no valid events after filtering.", vhdr_path)
+            logger.warning(f"Skipping {vhdr_path}; no valid events after filtering.")
             continue
 
         present_events = {desc for _, desc in valid_onsets}
         missing_events = sorted(set(event_id) - present_events)
         if missing_events:
+            missing_summary = ", ".join(missing_events)
             logger.warning(
-                "Skipping %s; missing required events after filtering: %s",
-                vhdr_path,
-                ", ".join(missing_events),
+                f"Skipping {vhdr_path}; missing required events after filtering: {missing_summary}"
             )
             continue
 
@@ -1925,7 +2066,7 @@ def extract_lemon_resting_state(
         epoch_data = epochs.get_data().astype(np.float32)
         n_epochs = epoch_data.shape[0]
         if not n_epochs:
-            logger.warning("No epochs extracted for %s", vhdr_path)
+            logger.warning(f"No epochs extracted for {vhdr_path}")
             continue
 
         eeg_store[cursor : cursor + n_epochs, :, :] = epoch_data
