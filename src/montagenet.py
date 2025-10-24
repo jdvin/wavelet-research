@@ -93,6 +93,7 @@ class PerceiverResamplerBlock(nn.Module):
         latents: Tensor,
         source: Tensor,
         attention_mask: Tensor | None = None,
+        dynamic_rope_freqs: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
         latents = self.latents_ln(latents)
@@ -144,6 +145,7 @@ class SpatioTemporalAttentionBlock(nn.Module):
         source: Tensor,
         T: int,
         seq_pos: Tensor | None = None,
+        dynamic_rope_freqs: Tensor | None = None,
         spatial_attention_mask: Tensor | None = None,
         temporal_attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
@@ -151,6 +153,7 @@ class SpatioTemporalAttentionBlock(nn.Module):
         latents = self.resampler_block(
             latents,
             source,
+            dynamic_rope_freqs=dynamic_rope_freqs,
             attention_mask=spatial_attention_mask,
             kv_cache=kv_cache,
         )
@@ -430,6 +433,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
     ):
         super().__init__()
         self.d_model = d_model
+        self.rope_dim = rope_dim
         self.n_latents = n_latents
         self.return_latents = return_latents
         self.query_latents = nn.Parameter(torch.randn(n_latents, d_model))
@@ -440,7 +444,9 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             data_config,
             d_model,
         )
-        self.embed_positions = nn.Linear(3, d_model)
+        self.positions_to_freqs = nn.Sequential(
+            GEGLU(3, d_model, bias=False), nn.Linear(d_model, rope_dim, bias=False)
+        )
         self.blocks = nn.ModuleList(
             [
                 SpatioTemporalAttentionBlock(
@@ -477,13 +483,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             )
 
         B, C, T = source.shape
-        pos_emb = repeat(
-            self.embed_positions(channel_positions),
-            "B C D -> B C D T",
-            B=B,
-            T=T,
-            D=self.d_model,
-        )
+
         # TODO: Is this slicing maneuver cheaper than just running the padded signals through the embedder?
         # Could I write a custom kernel that recognises the channel mask and only computes the relevant channels?
         channel_counts = channel_mask.sum(dim=1)
@@ -502,16 +502,14 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             ]
         )
         embeddings = self.embedder(signals, channel_counts, sampling_rates)
+        # Perpare source for spatial attention.
         source = rearrange(
             embeddings,
-            "B C T D -> B C D T",
+            "B C T D -> (B T) C D",
             B=B,
             C=C,
             D=self.d_model,
         )
-        # Perpare source for spatial attention.
-        source = rearrange(source + pos_emb, "B C D T -> (B T) C D")
-        # source = rearrange(source, "B C D T -> (B T) C D")
         # Initialize query latents
         latents = repeat(
             self.query_latents,
@@ -521,6 +519,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             D=self.d_model,
             L=self.n_latents,
         )
+        # The source sequence is of size channels plus latents because the latents are added to the source
         CpL = C + self.n_latents
         # Add "1" to the left of each channel mask to account for attending to the query latents.
         # Expand each mask for the temporal dimsion.
@@ -535,12 +534,21 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             CpL=CpL,
         )
 
+        pos_rope_freqs = rearrange(
+            self.positions_to_freqs(channel_positions),
+            "B C Rd -> (B C) Rd",
+            B=B,
+            C=C,
+            Rd=self.rope_dim,
+        )
+
         for block in self.blocks:
             latents = block(
                 latents,
                 source,
                 T,
                 seq_pos=sequence_positions,
+                dynamic_rope_freqs=pos_rope_freqs,
                 spatial_attention_mask=channel_mask,
                 temporal_attention_mask=samples_mask,
             )

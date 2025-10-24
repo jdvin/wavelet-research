@@ -1,10 +1,64 @@
+import math
 import torch
 from torch import Tensor
 from torch import nn
 from torch.nn import functional as F
 from .rope import RotaryEmbedding
 from .pos import RelativePositionBias
-from torch.backends.cuda import sdp_kernel
+
+
+def chunked_torch_spda(
+    q: torch.Tensor,  # (B_eff, H, Lq, D)
+    k: torch.Tensor,  # (B_eff, H, Lk, D)
+    v: torch.Tensor,  # (B_eff, H, Lk, D)
+    attn_mask: torch.Tensor
+    | None = None,  # broadcastable to (B_eff, 1|H, Lq, Lk) or (1, 1|H, Lq, Lk)
+    *,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    max_bh: int = 60000,  # keep (chunk_B * H) <= max_bh to avoid CUDA grid limits (~65535)
+) -> torch.Tensor:
+    B_eff, H, Lq, D = q.shape
+    _, _, Lk, _ = k.shape
+
+    # Fast path if already under the limit
+    if B_eff * H <= max_bh:
+        return F.scaled_dot_product_attention(
+            q.contiguous(),
+            k.contiguous(),
+            v.contiguous(),
+            attn_mask=None if attn_mask is None else attn_mask.contiguous(),
+            dropout_p=dropout_p,
+            is_causal=is_causal,
+        )
+
+    # Otherwise, chunk along batch
+    chunk_B = max(1, max_bh // max(H, 1))
+    n_chunks = math.ceil(B_eff / chunk_B)
+
+    outs = []
+    for i in range(n_chunks):
+        s = i * chunk_B
+        e = min((i + 1) * chunk_B, B_eff)
+        qi = q[s:e].contiguous()
+        ki = k[s:e].contiguous()
+        vi = v[s:e].contiguous()
+
+        # Slice mask on batch dim only if it actually has that dim; otherwise keep as-is for broadcasting
+        if attn_mask is None:
+            mi = None
+        else:
+            if attn_mask.size(0) == B_eff:
+                mi = attn_mask[s:e].contiguous()
+            else:
+                mi = attn_mask.contiguous()
+
+        yi = F.scaled_dot_product_attention(
+            qi, ki, vi, attn_mask=mi, dropout_p=dropout_p, is_causal=is_causal
+        )
+        outs.append(yi)
+
+    return torch.cat(outs, dim=0)
 
 
 class MultiHeadAttention(torch.nn.Module):
@@ -81,20 +135,9 @@ class MultiHeadAttention(torch.nn.Module):
             attention_mask: Tensor[float] (B, 1, T_q, T_kv)
         """
         if self.flash and not self.qk_norm:
-            with sdp_kernel(
-                enable_math=True, enable_flash=False, enable_mem_efficient=False
-            ):
-                y = F.scaled_dot_product_attention(
-                    q, k, v, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
-                )
-            # y = F.scaled_dot_product_attention(
-            #     q,
-            #     k,
-            #     v,
-            #     attn_mask=attention_mask,
-            #     dropout_p=self.dropout if self.training else 0,
-            #     scale=self.scale,
-            # )
+            y = chunked_torch_spda(
+                q, k, v, attention_mask, dropout_p=self.dropout, is_causal=False
+            )
 
         else:
             # (B, nhead, T_q, D_head) x (B, nhead, D_head, T_kv) -> (B, nhead, T_q, T_kv).
@@ -114,6 +157,7 @@ class MultiHeadAttention(torch.nn.Module):
         kv_cache: dict[int, Tensor] | None = None,
         attention_mask: Tensor | None = None,
         seq_pos: Tensor | None = None,
+        dynamic_rope_freqs: Tensor | None = None,
     ) -> tuple[Tensor]:
         B, T_q, D = x.size()  # Batch size, sequence length, model dimension.
         T_kv = xc.size(1) if xc is not None else T_q
@@ -156,12 +200,19 @@ class MultiHeadAttention(torch.nn.Module):
                 attention_mask = attention_mask + bias
         if self.rotary_embedding is not None:
             if seq_pos is not None:
-                q, k = self.rotary_embedding.custom_seq_pos_rotate_queries_and_keys(
+                (
+                    q,
+                    k,
+                ) = self.rotary_embedding.rotate_queries_and_keys_with_custom_seq_pos(
                     q, k, seq_pos
                 )
             else:
                 q = self.rotary_embedding.rotate_queries_or_keys(q, offset=T_cached)
                 k = self.rotary_embedding.rotate_queries_or_keys(k)
+        elif dynamic_rope_freqs is not None:
+            q, k = RotaryEmbedding.rotate_quries_and_keys_with_dynamic_freqs(
+                dynamic_rope_freqs, q, k
+            )
         y = self.qkv_attention(
             q,
             k,

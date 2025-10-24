@@ -335,8 +335,14 @@ class RotaryEmbedding(Module):
 
         return freqs
 
-    def custom_seq_pos_rotate_queries_and_keys(self, q, k, seq_pos):
+    def rotate_queries_and_keys_with_custom_seq_pos(self, q, k, seq_pos):
         freqs = self.forward(seq_pos).unsqueeze(1)
+        q_rot = apply_rotary_emb(freqs, q, seq_dim=-2)
+        k_rot = apply_rotary_emb(freqs, k, seq_dim=-2)
+        return q_rot, k_rot
+
+    @staticmethod
+    def rotate_quries_and_keys_with_dynamic_freqs(freqs, q, k):
         q_rot = apply_rotary_emb(freqs, q, seq_dim=-2)
         k_rot = apply_rotary_emb(freqs, k, seq_dim=-2)
         return q_rot, k_rot
