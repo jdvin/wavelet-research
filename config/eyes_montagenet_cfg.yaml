@@ -17,7 +17,7 @@ data_config:
     - 14
     - 31
     - 64
-    - 62
+    - 61
   sampling_rates:
     - 128
     - 160

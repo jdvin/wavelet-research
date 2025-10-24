@@ -113,7 +113,7 @@ ds_split_configs:
     sessions: [1]
     channel_mask: None
     data_source: lemon_rest
-    headset: lemon_62
+    headset: lemon_61
     sampling_rate: 250
     epoch_length_sec: 5.0
     resample_sfreq: 250.0
@@ -124,7 +124,7 @@ ds_split_configs:
     sessions: [1]
     channel_mask: None
     data_source: lemon_rest
-    headset: lemon_62
+    headset: lemon_61
     sampling_rate: 250
     epoch_length_sec: 5.0
     resample_sfreq: 250.0

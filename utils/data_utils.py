@@ -123,6 +123,17 @@ ELECTRODE_ORDER = np.array(
 TASK_LABEL_DTYPE = np.dtype("<U32")
 
 
+def _normalize_epochs(data: np.ndarray) -> np.ndarray:
+    """Apply per-channel normalization along the last axis."""
+    normalized = data.astype(np.float32, copy=True)
+    mean = normalized.mean(axis=-1, keepdims=True)
+    std = normalized.std(axis=-1, keepdims=True)
+    np.maximum(std, 1e-6, out=std)
+    normalized -= mean
+    normalized /= std
+    return normalized
+
+
 def _hash_identifiers(values: Sequence[str]) -> str:
     if not values:
         return "none"
@@ -615,7 +626,7 @@ class Headset(Enum):
     PHYSIONET_64 = "physionet_64"
     EMOTIV_INSIGHT_5 = "emotiv_insight_5"
     EMOTIV_EPOC_14 = "emotiv_epoc_14"
-    LEMON_62 = "lemon_62"
+    LEMON_61 = "lemon_61"
     UNICORN_HYBRID_BLACK_8 = "unicorn_hybrid_black_8"
     BRAIN_ACTICHAMP_31 = "brain_actichamp_31"
 
@@ -630,7 +641,7 @@ EMOTIV_HEADSET_ALIASES: dict[str, Headset] = {
 HEADSET_TO_CHANNELS: dict[Headset, list[str]] = {
     Headset.EMOTIV_EPOC_14: EPOC14_CHANNELS,
     Headset.EMOTIV_INSIGHT_5: INSIGHT5_CHANNELS,
-    Headset.LEMON_62: LEMON_CHANNELS,
+    Headset.LEMON_61: LEMON_CHANNELS,
     Headset.UNICORN_HYBRID_BLACK_8: NEUROTECHS_CHANNELS,
     Headset.BRAIN_ACTICHAMP_31: RESTING_METHODS_CHANNELS,
     Headset.PHYSIONET_64: PHYSIONET_64_CHANNELS,
@@ -777,7 +788,7 @@ class EmotivAlphaEpocDataSplit(EmotivAlphaDataSplit):
 @dataclass
 class LemonRestingStateDataSplit(DataSplit):
     data_source: DataSource = DataSource.LEMON_REST
-    headset: Headset = Headset.LEMON_62
+    headset: Headset = Headset.LEMON_61
     max_subjects: int = 215
     max_sessions: int = 1
     resample_sfreq: float | None = None
@@ -1019,10 +1030,6 @@ def extract_eeg_mmi_session_data(
     # Reverse the mapping to go from labels to annotations.
     labels_to_annotations = {value: key for key, value in event_map.items()}
     eeg_data = data.get_data()
-    # Normalize the data.
-    eeg_data = (eeg_data - eeg_data.mean(axis=1, keepdims=True)) / eeg_data.std(
-        axis=1, keepdims=True
-    )
     assert isinstance(eeg_data, np.ndarray)
     num_channels, num_samples = eeg_data.shape
     if events.shape[0] == 2:
@@ -1073,7 +1080,8 @@ def extract_eeg_mmi_session_data(
         annotation = EEG_MMI_SESSION_ANNOTATION_CODE_MAP[session][
             annotation_code.item()
         ].value
-        session_eeg[i, :, 0:event_duration] = eeg_data[:, event_start:event_stop]
+        epoch_slice = _normalize_epochs(eeg_data[:, event_start:event_stop])
+        session_eeg[i, :, 0:event_duration] = epoch_slice
         session_labels[i, :] = [task, annotation]
 
     session_eeg.flush()
@@ -1299,8 +1307,7 @@ def _write_emotiv_recording_data(
             continue
         channel_series = pd.to_numeric(df[column_name], errors="coerce").fillna(0.0)
         data = channel_series.to_numpy(dtype=np.float32, copy=False)
-        # Normalize the data.
-        signals[idx, : data.shape[0]] = (data - data.mean(axis=0)) / data.std(axis=0)
+        signals[idx, : data.shape[0]] = data
 
     next_epoch_idx = start_epoch_idx
     for event in recording.events:
@@ -1309,7 +1316,8 @@ def _write_emotiv_recording_data(
             epoch_end = epoch_start + epoch_length
             if epoch_end > signals.shape[1]:
                 break
-            eeg_store[next_epoch_idx, :, :] = signals[:, epoch_start:epoch_end]
+            epoch_slice = _normalize_epochs(signals[:, epoch_start:epoch_end])
+            eeg_store[next_epoch_idx, :, :] = epoch_slice
             labels_store[next_epoch_idx, 0] = EMOTIV_TASK_LABEL
             labels_store[next_epoch_idx, 1] = event.label
             next_epoch_idx += 1
@@ -1509,10 +1517,6 @@ def extract_neurotechs_eyes_split(
             )
         picks = [raw.ch_names.index(ch) for ch in channels]
         data = raw.get_data(picks=picks).astype(np.float32, copy=False)
-        data_mean = data.mean(axis=1, keepdims=True)
-        data_std = data.std(axis=1, keepdims=True)
-        data_std[data_std == 0] = 1.0
-        data = (data - data_mean) / data_std
 
         baseline_start = offset_samples
         baseline_stop = baseline_start + closed_samples + open_samples
@@ -1545,13 +1549,15 @@ def extract_neurotechs_eyes_split(
         for seg_idx in range(segments_per_condition):
             if cursor >= eeg_buffer.shape[0]:
                 raise RuntimeError("Cursor exceeded Neurotechs buffer allocation.")
-            eeg_buffer[cursor] = closed_segments[seg_idx]
+            normalized_closed = _normalize_epochs(closed_segments[seg_idx])
+            eeg_buffer[cursor] = normalized_closed
             labels_buffer[cursor, 0] = "move_eyes_closed"
             labels_buffer[cursor, 1] = "base_eyes_closed"
             cursor += 1
             if cursor >= eeg_buffer.shape[0]:
                 raise RuntimeError("Cursor exceeded Neurotechs buffer allocation.")
-            eeg_buffer[cursor] = open_segments[seg_idx]
+            normalized_open = _normalize_epochs(open_segments[seg_idx])
+            eeg_buffer[cursor] = normalized_open
             labels_buffer[cursor, 0] = "move_eyes_open"
             labels_buffer[cursor, 1] = "base_eyes_open"
             cursor += 1
@@ -1684,10 +1690,6 @@ def extract_resting_methods_split(
             )
         picks = [raw.ch_names.index(ch) for ch in channels]
         data = raw.get_data(picks=picks).astype(np.float32, copy=False)
-        data_mean = data.mean(axis=1, keepdims=True)
-        data_std = data.std(axis=1, keepdims=True)
-        data_std[data_std == 0] = 1.0
-        data = (data - data_mean) / data_std
 
         start_idx = offset_samples
         for block_index, block_name in enumerate(split.block_sequence):
@@ -1718,7 +1720,8 @@ def extract_resting_methods_split(
             for segment in segments:
                 if cursor >= eeg_buffer.shape[0]:
                     raise RuntimeError("Cursor exceeded resting EEG buffer allocation.")
-                eeg_buffer[cursor] = segment
+                normalized_segment = _normalize_epochs(segment)
+                eeg_buffer[cursor] = normalized_segment
                 labels_buffer[cursor, 0] = task_label
                 labels_buffer[cursor, 1] = base_label
                 cursor += 1
@@ -1830,9 +1833,7 @@ def extract_lemon_resting_state(
     epoch_suffix = f"{int(split.epoch_length_sec * 1000)}ms"
     sr_suffix = f"{int(target_sfreq_guess)}hz"
     subject_suffix = (
-        f"{len(lemon_subject_dirs)}sub"
-        if split.subjects is not None
-        else "allsubjects"
+        f"{len(lemon_subject_dirs)}sub" if split.subjects is not None else "allsubjects"
     )
     cache_prefix = f"lemon_{subject_suffix}_{sr_suffix}_{epoch_suffix}"
 
@@ -1840,11 +1841,7 @@ def extract_lemon_resting_state(
     labels_output_path = out_path / f"{cache_prefix}_labels.npy"
     channels_output_path = out_path / f"{cache_prefix}_channels.json"
 
-    if (
-        not ignore_cache
-        and eeg_output_path.exists()
-        and labels_output_path.exists()
-    ):
+    if not ignore_cache and eeg_output_path.exists() and labels_output_path.exists():
         logger.info(f"Using cached LEMON extraction at {eeg_output_path}")
         return np.load(eeg_output_path, mmap_mode="r", allow_pickle=True), np.load(
             labels_output_path, mmap_mode="r", allow_pickle=True
@@ -1964,11 +1961,7 @@ def extract_lemon_resting_state(
     labels_output_path = out_path / f"{cache_prefix}_labels.npy"
     channels_output_path = out_path / f"{cache_prefix}_channels.json"
 
-    if (
-        not ignore_cache
-        and eeg_output_path.exists()
-        and labels_output_path.exists()
-    ):
+    if not ignore_cache and eeg_output_path.exists() and labels_output_path.exists():
         logger.info(f"Using cached LEMON extraction at {eeg_output_path}")
         return np.load(eeg_output_path, mmap_mode="r", allow_pickle=True), np.load(
             labels_output_path, mmap_mode="r", allow_pickle=True
@@ -2002,12 +1995,6 @@ def extract_lemon_resting_state(
         )
         if split.resample_sfreq:
             raw.resample(target_sfreq, npad="auto")
-
-        data = raw.get_data()
-        data_mean = data.mean(axis=1, keepdims=True)
-        data_std = data.std(axis=1, keepdims=True)
-        data_std[data_std == 0] = 1.0
-        raw._data = (data - data_mean) / data_std
 
         annotations = raw.annotations
         epoch_samples_resampled = int(
@@ -2064,6 +2051,7 @@ def extract_lemon_resting_state(
         )
 
         epoch_data = epochs.get_data().astype(np.float32)
+        epoch_data = _normalize_epochs(epoch_data)
         n_epochs = epoch_data.shape[0]
         if not n_epochs:
             logger.warning(f"No epochs extracted for {vhdr_path}")
@@ -2138,7 +2126,7 @@ def get_multi_mapped_label_datasets(
             electrode_positions = INSIGHT5_CHANNEL_POSITIONS
         elif split.headset == Headset.EMOTIV_EPOC_14:
             electrode_positions = EPOC14_CHANNEL_POSITIONS
-        elif split.headset == Headset.LEMON_62:
+        elif split.headset == Headset.LEMON_61:
             electrode_positions = LEMON_CHANNEL_POSITIONS
         elif split.headset == Headset.UNICORN_HYBRID_BLACK_8:
             electrode_positions = NEUROTECHS_CHANNEL_POSITIONS

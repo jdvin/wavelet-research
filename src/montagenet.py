@@ -329,11 +329,8 @@ class ComplexMorletFactory(nn.Module):
         k_i = k_i / (k_i.norm(dim=-1, keepdim=True) + 1e-8)
 
         # Stack as 2*d_model real filters: [real; imag]
-        # TODO: reshape(2 * self.d_model, 1, K)???
         k = torch.stack([k_r, k_i], dim=1).reshape(self.d_model, K)
         return k.contiguous()  # (2*d_model, 1, K)
-        # self.kernel_banks[sr] = k.contiguous()  # (2*d_model, 1, K)
-        # return self.kernel_banks[sr]
 
 
 class KernelFactoryType(Enum):
@@ -436,7 +433,9 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         self.n_latents = n_latents
         self.return_latents = return_latents
         self.query_latents = nn.Parameter(torch.randn(n_latents, d_model))
-        rotary_embedding = RotaryEmbedding(dim=rope_dim, cache_max_seq_len=256)
+        temporal_rotary_embedding = RotaryEmbedding(
+            dim=rope_dim, cache_max_seq_len=256, freqs_for="pixel"
+        )
         self.embedder = ContinuousSignalEmbedder(
             data_config,
             d_model,
@@ -449,7 +448,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
                     n_heads,
                     d_mlp,
                     n_latents,
-                    rotary_embedding,
+                    temporal_rotary_embedding,
                     dropout,
                     scale_exponent,
                 )

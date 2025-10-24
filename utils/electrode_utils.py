@@ -158,7 +158,6 @@ LEMON_CHANNELS = [
     "Cz",
     "C4",
     "T8",
-    "VEOG",
     "CP5",
     "CP1",
     "CP2",
@@ -222,17 +221,12 @@ NEUROTECHS_CHANNEL_POSITIONS = torch.tensor(
     np.vstack([STANDARD_1020[ch] for ch in NEUROTECHS_CHANNELS]), dtype=torch.float32
 )
 RESTING_METHODS_CHANNEL_POSITIONS = torch.tensor(
-    np.vstack([STANDARD_1020[ch] for ch in RESTING_METHODS_CHANNELS]), dtype=torch.float32
+    np.vstack([STANDARD_1020[ch] for ch in RESTING_METHODS_CHANNELS]),
+    dtype=torch.float32,
 )
 LEMON_CHANNEL_POSITIONS = torch.tensor(
     np.vstack(
-        [
-            np.asarray(
-                STANDARD_1020.get(ch, np.zeros(3, dtype=np.float32)),
-                dtype=np.float32,
-            )
-            for ch in LEMON_CHANNELS
-        ]
+        [np.asarray(STANDARD_1020[ch], dtype=np.float32) for ch in LEMON_CHANNELS]
     ),
     dtype=torch.float32,
 )
@@ -540,14 +534,24 @@ def main():
     epoch_montage = Montage(
         "epoch-14", list(epoch_dict.keys()), np.array(list(epoch_dict.values()))
     )
+    lemon_dict = {ch: STANDARD_1020[ch] for ch in LEMON_CHANNELS}
+    lemon_montage = Montage(
+        "lemon-61", list(lemon_dict.keys()), np.array(list(lemon_dict.values()))
+    )
 
     # occipital = mask_regions(full_montage, [Region.OCCIPITAL])
     # parietal = mask_regions(full_montage, [Region.PARIETAL])
     # temporal = mask_regions(full_montage, [Region.TEMPORAL])
     # frontal = mask_regions(full_montage, [Region.FRONTAL])
-    colors = ["blue", "red", "green"]
+    colors = [
+        "blue",
+        # "red",
+    ]  # "green"]
     # montages = [occipital, parietal, temporal, frontal]
-    montages = [physionet_montage, insight_montage, epoch_montage]
+    montages = [
+        physionet_montage,
+        # lemon_montage,
+    ]
 
     electrode_positions = plot_montages(
         fig, montages, colors, physionet_montage, skull_bounds=skull_bounds
