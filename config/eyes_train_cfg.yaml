@@ -46,20 +46,20 @@ ds_split_configs:
     headset: emotiv_epoc_14
     epoch_length_sec: 5.0
     sampling_rate: 128
-  - split_name: train
-    source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
-    output_path: "./data/emotiv_alpha"
-    subjects: ["S001", "S002", "S003", "S004", "S005", "S006", "S007", "S008", "S009", "S010", "S011"]
-    sessions: [1]
-    channel_mask: None
-    data_source: emotive_alpha
-    headset: emotiv_insight_5
-    epoch_length_sec: 5.0
-    sampling_rate: 128
+  # - split_name: train
+  #   source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
+  #   output_path: "./data/emotiv_alpha"
+  #   subjects: ["S001", "S002", "S003", "S004", "S005", "S006", "S007", "S008", "S009", "S010", "S011"]
+  #   sessions: [1]
+  #   channel_mask: None
+  #   data_source: emotive_alpha
+  #   headset: emotiv_insight_5
+  #   epoch_length_sec: 5.0
+  #   sampling_rate: 128
   - split_name: emotiv_alpha_insight_eyes_val
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/emotiv-alpha-crowd/insight"
     output_path: "./data/emotiv_alpha"
-    subjects: ["S012", "S013", "S014"]
+    subjects: ["S001", "S002", "S003", "S004", "S005", "S006", "S007", "S008", "S009", "S010", "S011", "S012", "S013", "S014"]
     sessions: [1]
     channel_mask: None
     data_source: emotive_alpha
@@ -128,32 +128,24 @@ ds_split_configs:
     sampling_rate: 250
     epoch_length_sec: 5.0
     resample_sfreq: 250.0
-num_epochs: 10
+num_epochs: 5
 batch_size: 64
 train_micro_batch_size: 8
 val_micro_batch_size: 64
 validation_interval: 0.25
 log_interval: 1
-max_lr: 0.0001
+max_lr: 0.0002
 lr_schedules:
   - start: 0.0
     type: linear
     kargs:
       start_factor: 0.0000001
       end_factor: 1.0
-  # - start: 0.025
-  #   type: exponential
-  #   kargs:
-  #     gamma: 0.1
-  # - start: 0.05
-  #   type: cosine
-  #   kargs:
-  #     eta_min: 0.0
-  - start: 0.025
+  - start: 0.02
     type: constant
     kargs:
       factor: 1.0
-  - start: 0.5
+  - start: 0.8
     type: cosine
     kargs:
       eta_min: 0.0

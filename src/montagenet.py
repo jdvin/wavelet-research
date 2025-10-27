@@ -274,7 +274,7 @@ class SpectrumGridKernelFactory(nn.Module):
                 1j * phs[:, : dst.numel()]
             )
 
-        # Enforce real DC and Nyquist
+        # Enforce real DC and Nyquist for Hermitian symmetry.
         H_pos[:, 0] = H_pos[:, 0].real
         if K % 2 == 0:
             H_pos[:, -1] = H_pos[:, -1].real

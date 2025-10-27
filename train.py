@@ -135,8 +135,6 @@ def main(
         )
 
     logger.info("Creating data loaders.")
-    max_sr = max(model_config.data_config.sampling_rates)
-    max_channels = max(model_config.data_config.channel_counts)
     # Create data loaders.
     (
         train_dataloader,
