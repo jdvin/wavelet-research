@@ -141,7 +141,7 @@ lr_schedules:
     kargs:
       start_factor: 0.0000001
       end_factor: 1.0
-  - start: 0.02
+  - start: 0.025
     type: constant
     kargs:
       factor: 1.0

@@ -135,3 +135,7 @@ data/**
 checkpoints/**
 
 .DS_Store
+
+# Pytorch specific stuff
+*.pt
+*.pkg
