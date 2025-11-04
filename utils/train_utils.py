@@ -93,15 +93,13 @@ def list_grad_mismatches(model, atol=1e-6):
         rms_err = (sq_err / g_local.numel()).sqrt()
 
         if rms_err > atol:
-            mismatches.append(
-                (
-                    name,
-                    tuple(param.shape),
-                    grad.dtype,
-                    g_local.norm().item(),
-                    rms_err.item(),
-                )
-            )
+            mismatches.append((
+                name,
+                tuple(param.shape),
+                grad.dtype,
+                g_local.norm().item(),
+                rms_err.item(),
+            ))
 
     # ------------------------------------------------------------------
     # 4.  Print results (only if there are mismatches)
@@ -171,6 +169,23 @@ def load_yaml(path: str) -> dict:
     with open(path, "r") as f:
         config = yaml.safe_load(f)
     return config
+
+
+def recursive_to_serializable(obj) -> dict | str | int | float | bool | list:
+    if isinstance(obj, dict):
+        return {k: recursive_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [recursive_to_serializable(v) for v in obj]
+    elif obj is None or isinstance(obj, (str, bool, int, float)):
+        return obj
+    else:
+        try:
+            obj = dict(obj)
+        except TypeError:
+            raise TypeError(
+                f"Obj ({obj}) is not json primative and cannot be converted to a dictionary."
+            )
+        return recursive_to_serializable(obj)
 
 
 def get_microbatch(
@@ -329,9 +344,9 @@ def log_model_details(model: torch.nn.Module) -> None:
     param_counts = count_params(model)
     logger.info(
         "| "
-        + " | ".join(
-            [f"{key} Parameters: {value}" for key, value in param_counts.items()]
-        )
+        + " | ".join([
+            f"{key} Parameters: {value}" for key, value in param_counts.items()
+        ])
     )
 
 
@@ -477,13 +492,11 @@ class CarryOverScheduler(_LRScheduler):
     # ------------------------------------------------------------------ #
     def state_dict(self):
         base = super().state_dict()
-        base.update(
-            {
-                "stage_idx": self.stage_idx,
-                "stage_start": self.stage_start,
-                "current_state": self.current.state_dict(),
-            }
-        )
+        base.update({
+            "stage_idx": self.stage_idx,
+            "stage_start": self.stage_start,
+            "current_state": self.current.state_dict(),
+        })
         return base
 
     def load_state_dict(self, state_dict):
@@ -614,9 +627,10 @@ def get_dataloaders(
             if key.endswith("_val")
         }
     else:
-        train_sampler, val_samplers = None, {
-            key: None for key in dataset.keys() if key.endswith("_val")
-        }
+        train_sampler, val_samplers = (
+            None,
+            {key: None for key in dataset.keys() if key.endswith("_val")},
+        )
     from functools import partial
 
     train_dataloader = DataLoader(

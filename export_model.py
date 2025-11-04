@@ -6,7 +6,7 @@ import torch
 from torch.package import package_exporter
 
 from src.montagenet import MontageNet, MontageNetConfig
-from utils.train_utils import TrainingConfig, load_yaml
+from utils.train_utils import TrainingConfig, load_yaml, recursive_to_serializable
 
 
 def main():
@@ -41,17 +41,18 @@ def main():
         e.intern("src.components.*")
         e.extern("torch.**")
         e.extern("einops.**")
-        # Save your modules.
+        # Save target module.
         e.save_module("src.montagenet")
         # Save the state.
         e.save_pickle("assets", "state.pkl", model.state_dict())
         e._write(
-            "task_config.json",
+            "config" "task_config.json",
             json.dumps({
                 "ds_labels_map": training_config.ds_labels_map,
                 "ds_tasks_map": training_config.ds_tasks_map,
             }),
         )
+        e.save_pickle("config", "model_config.pkl", model_config)
     logger.info("Done.")
 
 
