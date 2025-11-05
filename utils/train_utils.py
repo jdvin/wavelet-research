@@ -695,7 +695,7 @@ def run_eval(
         accum_loss = torch.tensor([0.0], device=device)
         for _ in range(len(val_dataloader)):
             micro_batch = get_microbatch(val_dataloader_iterator, device, dtype)
-            loss, logits, labels = model(micro_batch)
+            loss, logits, labels = model(**micro_batch)
             accum_loss += loss.item() / len(val_dataloader)
 
             val_pbar.update()

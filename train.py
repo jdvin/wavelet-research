@@ -185,7 +185,9 @@ def main(
     metrics.lr.update(lr_scheduler.get_last_lr()[0])
     logger.info("Spinning Dataloader.")
     train_dataloader_iterator = get_dataloader_iterator(
-        train_dataloader, train_sampler, metrics.epoch.value  # type: ignore
+        train_dataloader,
+        train_sampler,
+        metrics.epoch.value,  # type: ignore
     )
     micro_batch = get_microbatch(train_dataloader_iterator, rank, torch_dtype)
     logger.info("Beginning Training.")
@@ -220,7 +222,7 @@ def main(
         # torch.cuda.memory._record_memory_history()
         with ddp_context:
             with scaler_context:
-                loss, logits, labels = model(micro_batch)
+                loss, logits, labels = model(**micro_batch)
                 # logger.debug("====Forward Pass====")
                 # reporter.report()
                 loss = loss / grad_accum_steps
@@ -238,9 +240,10 @@ def main(
         # If we are still accumulating gradients then skip gradient application and logging.
         if is_accumulating:
             metrics.microstep.update(1)
-            metrics.epoch_microstep.update(
-                (metrics.microstep.value, len(train_dataloader))
-            )
+            metrics.epoch_microstep.update((
+                metrics.microstep.value,
+                len(train_dataloader),
+            ))
             continue
         # list_grad_mismatches(model)
         if cfg.grad_clip > 0:

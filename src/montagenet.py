@@ -447,20 +447,18 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         self.positions_to_freqs = nn.Sequential(
             GEGLU(3, d_model, bias=False), nn.Linear(d_model, rope_dim, bias=False)
         )
-        self.blocks = nn.ModuleList(
-            [
-                SpatioTemporalAttentionBlock(
-                    d_model,
-                    n_heads,
-                    d_mlp,
-                    n_latents,
-                    temporal_rotary_embedding,
-                    dropout,
-                    scale_exponent,
-                )
-                for _ in range(n_blocks)
-            ]
-        )
+        self.blocks = nn.ModuleList([
+            SpatioTemporalAttentionBlock(
+                d_model,
+                n_heads,
+                d_mlp,
+                n_latents,
+                temporal_rotary_embedding,
+                dropout,
+                scale_exponent,
+            )
+            for _ in range(n_blocks)
+        ])
         self.data_config = data_config
 
     def forward(
@@ -495,12 +493,10 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             sampling_rates = (
                 samples_mask.sum(dim=1) // self.data_config.sequence_length_seconds
             )
-        signals = torch.cat(
-            [
-                source[i, :channel_count, :]
-                for i, channel_count in enumerate(channel_counts)
-            ]
-        )
+        signals = torch.cat([
+            source[i, :channel_count, :]
+            for i, channel_count in enumerate(channel_counts)
+        ])
         embeddings = self.embedder(signals, channel_counts, sampling_rates)
         # Perpare source for spatial attention.
         source = rearrange(
@@ -647,14 +643,12 @@ class MontageNet(nn.Module):
             config.scale_exponent,
         )
         # TODO: This will be slow, but we can optimise later.
-        self.task_heads = nn.ModuleList(
-            [
-                nn.Linear(config.d_model * config.n_latents, task.n_classes)
-                if config.return_latents != ReturnLatents.ALL
-                else nn.Conv1d(config.d_model * config.n_latents, task.n_classes, 1)
-                for task in config.tasks
-            ]
-        )
+        self.task_heads = nn.ModuleList([
+            nn.Linear(config.d_model * config.n_latents, task.n_classes)
+            if config.return_latents != ReturnLatents.ALL
+            else nn.Conv1d(config.d_model * config.n_latents, task.n_classes, 1)
+            for task in config.tasks
+        ])
 
         self.loss = partial(F.cross_entropy, label_smoothing=0.1)
 
@@ -665,24 +659,27 @@ class MontageNet(nn.Module):
             (1 - labels) * speech_densities + labels * (1 - speech_densities)
         )
 
-    def forward(self, batch: dict[str, Tensor]):
-        (
-            channel_signals,
-            channel_positions,
-            sequence_positions,
-            channel_mask,
-            samples_mask,
-            task_keys,
-            labels,
-        ) = (
-            batch["channel_signals"],
-            batch["channel_positions"],
-            batch["sequence_positions"],
-            batch["channel_mask"],
-            batch["samples_mask"],
-            batch["tasks"],
-            batch["labels"],
-        )
+    def forward(
+        self,
+        channel_signals: Tensor,
+        channel_positions: Tensor,
+        sequence_positions: Tensor,
+        task_keys: Tensor,
+        labels: Tensor,
+        channel_mask: Tensor | None = None,
+        samples_mask: Tensor | None = None,
+    ):
+        """
+        channel_signals: Tensor of shape (batch, channels, time).
+        channel_positions: Tensor of shape (batch, channels, 3) with the position of each channel in the signal.
+        sequence_positions: Tensor of shape (batch, samples) with the index of each sample in the signal.
+            NB: Because each sample has potentially a different sampling rate, this will vary per sample.
+        task_keys: Tensor of shape (batch,) with the key of the task for each sample.
+        labels: Tensor of shape (batch,) with the label for each sample.
+        channel_masks: Boolean tensor of shape (batch, channels) with True for each channel that should be included in the embedding and spatial attention.
+        samples_mask: Boolean tensor of shape (batch, samples) with True for each sample that should be included in the embedding.
+
+        """
         latents = self.encoder(
             channel_signals,
             channel_positions,
