@@ -12,6 +12,9 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import torch
 
+# How much to push each subsequent montage away from the center
+MONTAGE_RADIUS_OFFSET_STEP = 0.05
+
 PHYSIONET_64_CHANNELS = [
     "FC5",
     "FC3",
@@ -225,9 +228,9 @@ RESTING_METHODS_CHANNEL_POSITIONS = torch.tensor(
     dtype=torch.float32,
 )
 LEMON_CHANNEL_POSITIONS = torch.tensor(
-    np.vstack(
-        [np.asarray(STANDARD_1020[ch], dtype=np.float32) for ch in LEMON_CHANNELS]
-    ),
+    np.vstack([
+        np.asarray(STANDARD_1020[ch], dtype=np.float32) for ch in LEMON_CHANNELS
+    ]),
     dtype=torch.float32,
 )
 
@@ -428,6 +431,12 @@ def plot_montages(
         else:
             pos_final = pos_array
 
+        # Offset each montage radially so overlapping traces stay visible
+        montage_center = np.mean(pos_final, axis=0, keepdims=True)
+        radial_vectors = pos_final - montage_center
+        radius_multiplier = 1.0 + i * MONTAGE_RADIUS_OFFSET_STEP
+        pos_final = montage_center + radial_vectors * radius_multiplier
+
         # Store electrode positions for bounds calculation
         all_electrode_positions.append(pos_final)
 
@@ -538,6 +547,18 @@ def main():
     lemon_montage = Montage(
         "lemon-61", list(lemon_dict.keys()), np.array(list(lemon_dict.values()))
     )
+    neurotechs_dict = {ch: STANDARD_1020[ch] for ch in NEUROTECHS_CHANNELS}
+    neurotechs_montage = Montage(
+        "neurotechs-8",
+        list(neurotechs_dict.keys()),
+        np.array(list(neurotechs_dict.values())),
+    )
+    resting_dict = {ch: STANDARD_1020[ch] for ch in RESTING_METHODS_CHANNELS}
+    resting_montage = Montage(
+        "resting-methods-30",
+        list(resting_dict.keys()),
+        np.array(list(resting_dict.values())),
+    )
 
     # occipital = mask_regions(full_montage, [Region.OCCIPITAL])
     # parietal = mask_regions(full_montage, [Region.PARIETAL])
@@ -545,12 +566,20 @@ def main():
     # frontal = mask_regions(full_montage, [Region.FRONTAL])
     colors = [
         "blue",
-        # "red",
-    ]  # "green"]
+        "red",
+        "green",
+        "purple",
+        "orange",
+        "yellow",
+    ]
     # montages = [occipital, parietal, temporal, frontal]
     montages = [
         physionet_montage,
-        # lemon_montage,
+        lemon_montage,
+        epoch_montage,
+        insight_montage,
+        neurotechs_montage,
+        resting_montage,
     ]
 
     electrode_positions = plot_montages(
