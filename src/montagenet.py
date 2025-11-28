@@ -103,6 +103,7 @@ class PerceiverResamplerBlock(nn.Module):
             torch.cat([latents, source], dim=1),
             attention_mask=attention_mask,
             kv_cache=kv_cache,
+            dynamic_rope_freqs=dynamic_rope_freqs,
         )
         latents = latents + self.mlp(self.mlp_ln(latents))
         return latents
@@ -517,7 +518,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         )
         # The source sequence is of size channels plus latents because the latents are added to the source
         CpL = C + self.n_latents
-        # Add "1" to the left of each channel mask to account for attending to the query latents.
+        # Add "True" for each query latent to the left of each channel mask so that they are attended to.
         # Expand each mask for the temporal dimsion.
         # Fold temporal dimension into batch dimension.
         channel_mask = rearrange(
@@ -530,11 +531,15 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             CpL=CpL,
         )
 
+        # Pad the freqs with zeros vectors on the left for identity ropes to the query latents.
+        # They do not need to be spatially embeded because they are already free parameters.
         pos_rope_freqs = rearrange(
-            self.positions_to_freqs(channel_positions),
-            "B C Rd -> (B C) Rd",
+            F.pad(
+                self.positions_to_freqs(channel_positions), (0, 0, self.n_latents, 0)
+            ),
+            "B CpL Rd -> (B CpL) Rd",
             B=B,
-            C=C,
+            CpL=CpL,
             Rd=self.rope_dim,
         )
 

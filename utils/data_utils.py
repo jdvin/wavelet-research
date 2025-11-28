@@ -52,73 +52,71 @@ class ValidationType(Enum):
     OBJECT = "object"
 
 
-ELECTRODE_ORDER = np.array(
-    [
-        "Fp1",
-        "F3",
-        "F7",
-        "FT9",
-        "FC5",
-        "FC1",
-        "C3",
-        "T7",
-        "TP9",
-        "CP5",
-        "CP1",
-        "Pz",
-        "P3",
-        "P7",
-        "O1",
-        "Oz",
-        "O2",
-        "P4",
-        "P8",
-        "TP10",
-        "CP6",
-        "CP2",
-        "Cz",
-        "C4",
-        "T8",
-        "FT10",
-        "FC6",
-        "FC2",
-        "F4",
-        "F8",
-        "Fp2",
-        "AF7",
-        "AF3",
-        "AFz",
-        "F1",
-        "F5",
-        "FT7",
-        "FC3",
-        "FCz",
-        "C1",
-        "C5",
-        "TP7",
-        "CP3",
-        "P1",
-        "P5",
-        "PO7",
-        "PO3",
-        "POz",
-        "PO4",
-        "PO8",
-        "P6",
-        "P2",
-        "CPz",
-        "CP4",
-        "TP8",
-        "C6",
-        "C2",
-        "FC4",
-        "FT8",
-        "F6",
-        "F2",
-        "AF4",
-        "AF8",
-    ]
-)
+ELECTRODE_ORDER = np.array([
+    "Fp1",
+    "F3",
+    "F7",
+    "FT9",
+    "FC5",
+    "FC1",
+    "C3",
+    "T7",
+    "TP9",
+    "CP5",
+    "CP1",
+    "Pz",
+    "P3",
+    "P7",
+    "O1",
+    "Oz",
+    "O2",
+    "P4",
+    "P8",
+    "TP10",
+    "CP6",
+    "CP2",
+    "Cz",
+    "C4",
+    "T8",
+    "FT10",
+    "FC6",
+    "FC2",
+    "F4",
+    "F8",
+    "Fp2",
+    "AF7",
+    "AF3",
+    "AFz",
+    "F1",
+    "F5",
+    "FT7",
+    "FC3",
+    "FCz",
+    "C1",
+    "C5",
+    "TP7",
+    "CP3",
+    "P1",
+    "P5",
+    "PO7",
+    "PO3",
+    "POz",
+    "PO4",
+    "PO8",
+    "P6",
+    "P2",
+    "CPz",
+    "CP4",
+    "TP8",
+    "C6",
+    "C2",
+    "FC4",
+    "FT8",
+    "F6",
+    "F2",
+    "AF4",
+    "AF8",
+])
 # Task AND label dtype. 11 character string.
 TASK_LABEL_DTYPE = np.dtype("<U32")
 
@@ -241,12 +239,10 @@ def extract_things_100ms_ds(
     }
     if cached and not reset_cache:
         return ds
-    total_rows = sum(
-        [
-            session_epochs[split_type] * sessions_per_subject * len(subjects)
-            for split_type in ds.keys()
-        ]
-    )
+    total_rows = sum([
+        session_epochs[split_type] * sessions_per_subject * len(subjects)
+        for split_type in ds.keys()
+    ])
     split_types = ["train", "test"] if not is_test_run else ["train"]
     pbar = tqdm(total=total_rows, desc="Extracting EEG Data.")
     n = 0
@@ -261,9 +257,9 @@ def extract_things_100ms_ds(
                 )
                 data = np.load(path, allow_pickle=True).all()
                 stim_index = data["ch_types"].index("stim")
-                ch_names = np.array(
-                    [name for name in data["ch_names"] if name != "stim"]
-                )
+                ch_names = np.array([
+                    name for name in data["ch_names"] if name != "stim"
+                ])
                 # Ensure the order of the electrode order is consistent.
                 # This may be overkill but it is very important, so worth being sure about.
                 _, ordered_electrode_indexes = np.where(
@@ -351,19 +347,17 @@ def mapped_label_ds_collate_fn(
         [],
         [],
     )
-    channel_counts, samples_counts = zip(
-        *[
-            (
-                ds_sample["channel_signals"].shape[0],
-                ds_sample["channel_signals"].shape[1],
-            )
-            for ds_sample in ds_samples
-        ]
-    )
+    channel_counts, samples_counts = zip(*[
+        (
+            ds_sample["channel_signals"].shape[0],
+            ds_sample["channel_signals"].shape[1],
+        )
+        for ds_sample in ds_samples
+    ])
     max_channels = max(channel_counts)
     max_samples = max(samples_counts)
     for ds_sample in ds_samples:
-        tasks.append(ds_sample["tasks"])
+        tasks.append(ds_sample["task_keys"])
         labels.append(ds_sample["labels"])
 
         cs = ds_sample["channel_signals"]
@@ -409,7 +403,7 @@ def mapped_label_ds_collate_fn(
         "sequence_positions": sequence_positions_tensor,
         "channel_mask": channel_masks_tensor,
         "samples_mask": samples_masks_tensor,
-        "tasks": tasks_tensor,
+        "task_keys": tasks_tensor,
         "labels": labels_tensor,
     }
 
@@ -1533,8 +1527,7 @@ def extract_neurotechs_eyes_split(
         ]
         open_data = data[
             :,
-            baseline_start
-            + closed_samples : baseline_start
+            baseline_start + closed_samples : baseline_start
             + closed_samples
             + open_samples,
         ][:, : segments_per_condition * epoch_samples]
@@ -1926,13 +1919,11 @@ def extract_lemon_resting_state(
                 "All subjects must have identical channel ordering."
             )
 
-        subject_info.append(
-            {
-                "subject": subject_dir.name,
-                "vhdr_path": vhdr_path,
-                "valid_events": valid_count,
-            }
-        )
+        subject_info.append({
+            "subject": subject_dir.name,
+            "vhdr_path": vhdr_path,
+            "valid_events": valid_count,
+        })
         total_epochs += valid_count
 
     if not subject_info:
@@ -2235,12 +2226,10 @@ def get_libri_brain_speech_dataset(
         assert sessions is not None
         keys = []
         for book, chapters, session in zip(books, books_chapters, sessions):
-            keys.extend(
-                [
-                    ("0", str(chapter), f"Sherlock{book}", str(session))
-                    for chapter in chapters
-                ]
-            )
+            keys.extend([
+                ("0", str(chapter), f"Sherlock{book}", str(session))
+                for chapter in chapters
+            ])
         variant = {"include_run_keys": keys}
     else:
         variant = {"partition": partition}
@@ -2264,7 +2253,7 @@ def get_libri_brain_speech_dataset(
 
 
 def libri_speech_brain_collate_fn(
-    items: list[tuple[torch.Tensor, int, np.ndarray, int]]
+    items: list[tuple[torch.Tensor, int, np.ndarray, int]],
 ):
     channel_positions, tasks, channel_signals, labels, metadata = zip(*items)
     channel_positions = torch.stack(channel_positions)

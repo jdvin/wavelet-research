@@ -69,7 +69,7 @@ class MappedLabelDataset(Dataset):
             "channel_signals": input,
             "channel_positions": self.channel_positions,
             "sequence_positions": self.sequence_positions,
-            "tasks": self.tasks_map[task],
+            "task_keys": self.tasks_map[task],
             "labels": self.labels_map[label],
         }
 
