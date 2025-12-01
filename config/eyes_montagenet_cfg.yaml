@@ -7,9 +7,11 @@ dropout: 0.1
 scale_exponent: -0.25
 return_latents: mean_pool
 n_blocks: 1
-tasks:
-  - key: eyes
-    n_classes: 2
+task_map:
+  - key: move_eyes
+    labels_map:
+      eyes_open: 0
+      eyes_closed: 1
 data_config:
   channel_counts:
     - 5

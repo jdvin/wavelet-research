@@ -147,8 +147,6 @@ class TrainingConfig:
     model_config_path: str
     checkpoints: bool
     ds_split_configs: list[dict[str, Any]]
-    ds_labels_map: dict[str, int]
-    ds_tasks_map: dict[str, int]
     num_epochs: int
     batch_size: int
     train_micro_batch_size: int

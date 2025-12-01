@@ -45,13 +45,6 @@ def main():
         e.save_module("src.montagenet")
         # Save the state.
         e.save_pickle("assets", "state.pkl", model.state_dict())
-        e._write(
-            "config" "task_config.json",
-            json.dumps({
-                "ds_labels_map": training_config.ds_labels_map,
-                "ds_tasks_map": training_config.ds_tasks_map,
-            }),
-        )
         e.save_pickle("config", "model_config.pkl", model_config)
     logger.info("Done.")
 

@@ -116,8 +116,8 @@ def main(
     if is_main_process:
         ds = get_multi_mapped_label_datasets(
             ds_splits,
-            cfg.ds_labels_map,
-            cfg.ds_tasks_map,
+            model_config.tasks_map,
+            model_config.labels_map,
             model_config.data_config,
             reset_data_cache,
         )
@@ -128,8 +128,8 @@ def main(
         dist.barrier()
         ds = get_multi_mapped_label_datasets(
             ds_splits,
-            cfg.ds_labels_map,
-            cfg.ds_tasks_map,
+            model_config.tasks_map,
+            model_config.labels_map,
             model_config.data_config,
             reset_data_cache,
         )

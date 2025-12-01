@@ -19,7 +19,7 @@ from tqdm import tqdm
 from numpy.lib.format import open_memmap
 from pnpl.datasets import LibriBrainSpeech
 
-from src.montagenet import DataConfig, MontageNetConfig
+from src.montagenet import DataConfig, MontageNetConfig, TaskConfig
 from utils.torch_datasets import (
     LibriBrainSpeechDataset,
     MappedLabelDataset,
@@ -484,8 +484,7 @@ def get_things_100ms_collate_fn(
 
 
 class Task(Enum):
-    BASELINE_EYES_OPEN = "move_eyes_open"
-    BASELINE_EYES_CLOSED = "move_eyes_closed"
+    MOVE_EYES = "move_eyes"
     MOVE_LEFT_RIGHT_FIST = "move_left_right_fist"
     IMAGE_LEFT_RIGHT_FIST = "imag_left_right_fist"
     MOVE_FIST_FEET = "move_fist_feet"
@@ -493,8 +492,8 @@ class Task(Enum):
 
 
 EEG_MMI_SESSION_TO_TASK = {
-    "R01": Task.BASELINE_EYES_OPEN,
-    "R02": Task.BASELINE_EYES_CLOSED,
+    "R01": Task.MOVE_EYES,
+    "R02": Task.MOVE_EYES,
     "R03": Task.MOVE_LEFT_RIGHT_FIST,
     "R04": Task.IMAGE_LEFT_RIGHT_FIST,
     "R05": Task.MOVE_FIST_FEET,
@@ -511,9 +510,9 @@ EEG_MMI_SESSION_TO_TASK = {
 
 
 class Annotation(Enum):
-    EYES_OPEN = "base_eyes_open"
-    EYES_CLOSED = "base_eyes_closed"
-    REST = "base_rest"
+    EYES_OPEN = "eyes_open"
+    EYES_CLOSED = "eyes_closed"
+    REST = "rest"
     MOVE_LEFT_FIST = "move_left_fist"
     MOVE_RIGHT_FIST = "move_right_fist"
     MOVE_BOTH_FIST = "move_both_fist"
@@ -595,13 +594,13 @@ EEG_MMI_SESSION_ANNOTATION_CODE_MAP: dict[str, dict[str, Annotation]] = {
 
 
 EMOTIV_EVENT_TYPE_TO_LABEL = {
-    "eyesopen_element": "base_eyes_open",
-    "eyesopen": "base_eyes_open",
-    "eyesclose_element": "base_eyes_closed",
-    "eyesclose": "base_eyes_closed",
+    "eyesopen_element": "eyes_open",
+    "eyesopen": "eyes_open",
+    "eyesclose_element": "eyes_closed",
+    "eyesclose": "eyes_closed",
 }
 
-EMOTIV_TASK_LABEL = "move_eyes_closed"
+EMOTIV_TASK_LABEL = Task.MOVE_EYES
 
 EMOTIV_FILENAME_PATTERN = re.compile(
     r"^(?P<root>Alpha Supression_(?P<headset>[A-Z0-9]+)_.+?)(?P<suffix>_markers)?_S(?P<subject>\d{3})\.(?P<extension>csv|json)$"
@@ -1544,15 +1543,15 @@ def extract_neurotechs_eyes_split(
                 raise RuntimeError("Cursor exceeded Neurotechs buffer allocation.")
             normalized_closed = _normalize_epochs(closed_segments[seg_idx])
             eeg_buffer[cursor] = normalized_closed
-            labels_buffer[cursor, 0] = "move_eyes_closed"
-            labels_buffer[cursor, 1] = "base_eyes_closed"
+            labels_buffer[cursor, 0] = "move_eyes"
+            labels_buffer[cursor, 1] = "eyes_closed"
             cursor += 1
             if cursor >= eeg_buffer.shape[0]:
                 raise RuntimeError("Cursor exceeded Neurotechs buffer allocation.")
             normalized_open = _normalize_epochs(open_segments[seg_idx])
             eeg_buffer[cursor] = normalized_open
-            labels_buffer[cursor, 0] = "move_eyes_open"
-            labels_buffer[cursor, 1] = "base_eyes_open"
+            labels_buffer[cursor, 0] = "move_eyes"
+            labels_buffer[cursor, 1] = "eyes_open"
             cursor += 1
         raw.close()
 
@@ -1578,8 +1577,8 @@ def extract_neurotechs_eyes_split(
 
 
 RESTING_BLOCK_LABELS = {
-    "eyes_open": ("move_eyes_open", "base_eyes_open"),
-    "eyes_closed": ("move_eyes_closed", "base_eyes_closed"),
+    "eyes_open": ("move_eyes", "eyes_open"),
+    "eyes_closed": ("move_eyes", "eyes_closed"),
 }
 
 
@@ -1798,8 +1797,8 @@ def extract_lemon_resting_state(
 
     event_id = {"Stimulus/S200": 1, "Stimulus/S210": 2}
     label_map = {
-        "Stimulus/S200": ("move_eyes_open", "base_eyes_open"),
-        "Stimulus/S210": ("move_eyes_closed", "base_eyes_closed"),
+        "Stimulus/S200": ("move_eyes", "eyes_open"),
+        "Stimulus/S210": ("move_eyes", "eyes_closed"),
     }
 
     first_native_sfreq: float | None = None
@@ -2100,8 +2099,8 @@ def ds_split_factory(splits: list[dict[str, Any]]):
 
 def get_multi_mapped_label_datasets(
     splits: list[DataSplit],
-    labels_map: dict[str, int],
     tasks_map: dict[str, int],
+    labels_map: dict[str, int],
     data_config: DataConfig,
     reset_cache: bool = False,
 ):
@@ -2175,6 +2174,7 @@ def get_multi_mapped_label_datasets(
             )
         else:
             raise NotImplementedError(f"Unknown data source: {split.data_source}")
+
         dataset = MappedLabelDataset(
             split_eeg,
             split_labels,
@@ -2294,8 +2294,8 @@ if __name__ == "__main__":
     ds_splits = ds_split_factory(cfg.ds_split_configs)
     ds = get_multi_mapped_label_datasets(
         ds_splits,
-        cfg.ds_labels_map,
-        cfg.ds_tasks_map,
+        model_config.tasks_map,
+        model_config.labels_map,
         model_config.data_config,
         reset_cache=True,
     )

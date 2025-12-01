@@ -218,7 +218,11 @@ def lcmN(*nums: int) -> int:
 @dataclass
 class TaskConfig:
     key: str
-    n_classes: int
+    labels_map: dict[str, int]
+
+    @property
+    def n_classes(self) -> int:
+        return len(self.labels_map)
 
 
 class SpectrumGridKernelFactory(nn.Module):
@@ -622,6 +626,19 @@ class MontageNetConfig:
         self.tasks = [TaskConfig(**task) for task in tasks]
         self.data_config = DataConfig(**data_config)
         self.return_latents = ReturnLatents(return_latents)
+
+    @property
+    def tasks_map(self) -> dict[str, int]:
+        return {task.key: i for i, task in enumerate(self.tasks)}
+
+    @property
+    def labels_map(self) -> dict[str, int]:
+        out = {}
+        for task in self.tasks:
+            for label in task.labels_map:
+                assert label not in out
+                out[label] = task.labels_map[label]
+        return out
 
 
 class MontageNet(nn.Module):

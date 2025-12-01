@@ -1,10 +1,4 @@
 dtype: bf16
-ds_labels_map:
-    base_eyes_open: 0
-    base_eyes_closed: 1
-ds_tasks_map:
-    move_eyes_open: 0
-    move_eyes_closed: 0
 ds_split_configs:
   - split_name: train
     source_base_path: "/teamspace/gcs_connections/neural-decode-data/eeg-motor-movement-imagery"
