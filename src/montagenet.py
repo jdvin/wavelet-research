@@ -218,6 +218,7 @@ def lcmN(*nums: int) -> int:
 @dataclass
 class TaskConfig:
     key: str
+    index: int
     labels_map: dict[str, int]
 
     @property
@@ -629,7 +630,12 @@ class MontageNetConfig:
 
     @property
     def tasks_map(self) -> dict[str, int]:
-        return {task.key: i for i, task in enumerate(self.tasks)}
+        out = {}
+        for i, task in enumerate(sorted(self.tasks, key=lambda task: task.index)):
+            assert task.key not in out
+            assert task.index == i
+            out[task.key] = i
+        return out
 
     @property
     def labels_map(self) -> dict[str, int]:

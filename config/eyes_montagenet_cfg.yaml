@@ -7,8 +7,9 @@ dropout: 0.1
 scale_exponent: -0.25
 return_latents: mean_pool
 n_blocks: 1
-task_map:
+tasks:
   - key: move_eyes
+    index: 0
     labels_map:
       eyes_open: 0
       eyes_closed: 1
