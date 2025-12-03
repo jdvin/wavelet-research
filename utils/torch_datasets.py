@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 import torch
 from torch.nn import functional as F
 
-from src.montagenet import DataConfig, lcmN
+from src.montagenet import DataConfig
 
 
 class EEGEyeNetDataset(Dataset):
@@ -51,11 +51,10 @@ class MappedLabelDataset(Dataset):
             self.channel_positions = channel_positions[channel_mask]
         else:
             self.channel_positions = channel_positions
-        sr_lcm = lcmN(*data_config.sampling_rates)
-        self.sequence_positions = torch.arange(
-            0, int(sr_lcm * data_config.sequence_length_seconds), sr_lcm // sr
+        sample_indexes = torch.arange(0, sr * data_config.sequence_length_seconds)
+        self.sequence_positions = (
+            sample_indexes / sr * data_config.position_index_per_second
         )
-        assert sr in data_config.sampling_rates
 
     def __len__(self):
         return len(self.labels)

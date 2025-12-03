@@ -594,10 +594,10 @@ EEG_MMI_SESSION_ANNOTATION_CODE_MAP: dict[str, dict[str, Annotation]] = {
 
 
 EMOTIV_EVENT_TYPE_TO_LABEL = {
-    "eyesopen_element": "eyes_open",
-    "eyesopen": "eyes_open",
-    "eyesclose_element": "eyes_closed",
-    "eyesclose": "eyes_closed",
+    "eyesopen_element": Annotation.EYES_OPEN,
+    "eyesopen": Annotation.EYES_OPEN,
+    "eyesclose_element": Annotation.EYES_CLOSED,
+    "eyesclose": Annotation.EYES_CLOSED,
 }
 
 EMOTIV_TASK_LABEL = Task.MOVE_EYES
@@ -865,11 +865,11 @@ class RestingEEGMethodsDataSplit(DataSplit):
     headset: Headset = Headset.BRAIN_ACTICHAMP_31
     max_subjects: int = 99
     max_sessions: int = 2
-    block_sequence: tuple[str, ...] = (
-        "eyes_open",
-        "eyes_closed",
-        "eyes_open",
-        "eyes_closed",
+    block_sequence: tuple[Annotation, ...] = (
+        Annotation.EYES_OPEN,
+        Annotation.EYES_CLOSED,
+        Annotation.EYES_OPEN,
+        Annotation.EYES_CLOSED,
     )
     block_duration_sec: float = 135.0
     baseline_offset_sec: float = 0.0
@@ -904,15 +904,11 @@ class RestingEEGMethodsDataSplit(DataSplit):
         super().__post_init__()
         if len(self.block_sequence) == 0:
             raise ValueError("block_sequence must contain at least one entry.")
-        normalized_blocks: list[str] = []
         for block in self.block_sequence:
-            block_name = block.lower()
-            if block_name not in RESTING_BLOCK_LABELS:
+            if block not in RESTING_BLOCK_LABELS:
                 raise ValueError(
                     f"Unknown block name '{block}'. Expected keys: {list(RESTING_BLOCK_LABELS.keys())}."
                 )
-            normalized_blocks.append(block_name)
-        self.block_sequence = tuple(normalized_blocks)
 
     def subject_ids(self) -> list[str]:
         return list(self.subjects)
@@ -1232,6 +1228,7 @@ def _build_emotiv_recording_info(
         label = EMOTIV_EVENT_TYPE_TO_LABEL.get(event_type)
         if label is None:
             continue
+        label = label.value
         start_time = float(row["timestamp"])
         duration = float(row["duration"])
         if duration <= 0:
@@ -1311,7 +1308,7 @@ def _write_emotiv_recording_data(
                 break
             epoch_slice = _normalize_epochs(signals[:, epoch_start:epoch_end])
             eeg_store[next_epoch_idx, :, :] = epoch_slice
-            labels_store[next_epoch_idx, 0] = EMOTIV_TASK_LABEL
+            labels_store[next_epoch_idx, 0] = EMOTIV_TASK_LABEL.value
             labels_store[next_epoch_idx, 1] = event.label
             next_epoch_idx += 1
             epoch_start = epoch_end
@@ -1543,15 +1540,15 @@ def extract_neurotechs_eyes_split(
                 raise RuntimeError("Cursor exceeded Neurotechs buffer allocation.")
             normalized_closed = _normalize_epochs(closed_segments[seg_idx])
             eeg_buffer[cursor] = normalized_closed
-            labels_buffer[cursor, 0] = "move_eyes"
-            labels_buffer[cursor, 1] = "eyes_closed"
+            labels_buffer[cursor, 0] = Task.MOVE_EYES.value
+            labels_buffer[cursor, 1] = Annotation.EYES_CLOSED.value
             cursor += 1
             if cursor >= eeg_buffer.shape[0]:
                 raise RuntimeError("Cursor exceeded Neurotechs buffer allocation.")
             normalized_open = _normalize_epochs(open_segments[seg_idx])
             eeg_buffer[cursor] = normalized_open
-            labels_buffer[cursor, 0] = "move_eyes"
-            labels_buffer[cursor, 1] = "eyes_open"
+            labels_buffer[cursor, 0] = Task.MOVE_EYES.value
+            labels_buffer[cursor, 1] = Annotation.EYES_OPEN.value
             cursor += 1
         raw.close()
 
@@ -1577,8 +1574,8 @@ def extract_neurotechs_eyes_split(
 
 
 RESTING_BLOCK_LABELS = {
-    "eyes_open": ("move_eyes", "eyes_open"),
-    "eyes_closed": ("move_eyes", "eyes_closed"),
+    Annotation.EYES_OPEN: (Task.MOVE_EYES, Annotation.EYES_OPEN),
+    Annotation.EYES_CLOSED: (Task.MOVE_EYES, Annotation.EYES_CLOSED),
 }
 
 
@@ -1714,8 +1711,8 @@ def extract_resting_methods_split(
                     raise RuntimeError("Cursor exceeded resting EEG buffer allocation.")
                 normalized_segment = _normalize_epochs(segment)
                 eeg_buffer[cursor] = normalized_segment
-                labels_buffer[cursor, 0] = task_label
-                labels_buffer[cursor, 1] = base_label
+                labels_buffer[cursor, 0] = task_label.value
+                labels_buffer[cursor, 1] = base_label.value
                 cursor += 1
         raw.close()
 
@@ -1797,8 +1794,8 @@ def extract_lemon_resting_state(
 
     event_id = {"Stimulus/S200": 1, "Stimulus/S210": 2}
     label_map = {
-        "Stimulus/S200": ("move_eyes", "eyes_open"),
-        "Stimulus/S210": ("move_eyes", "eyes_closed"),
+        "Stimulus/S200": (Task.MOVE_EYES, Annotation.EYES_OPEN),
+        "Stimulus/S210": (Task.MOVE_EYES, Annotation.EYES_CLOSED),
     }
 
     first_native_sfreq: float | None = None
@@ -2052,8 +2049,8 @@ def extract_lemon_resting_state(
         for i, code in enumerate(event_codes):
             desc = code_to_desc[int(code)]
             task, label = label_map[desc]
-            labels_store[cursor + i, 0] = task
-            labels_store[cursor + i, 1] = label
+            labels_store[cursor + i, 0] = task.value
+            labels_store[cursor + i, 1] = label.value
 
         cursor += n_epochs
 

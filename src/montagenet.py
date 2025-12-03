@@ -190,29 +190,13 @@ class ReturnLatents(Enum):
 
 @dataclass
 class DataConfig:
-    # Number of channel for each data source.
-    channel_counts: list[int]
-    # Sampling rate for each data source.
-    sampling_rates: list[int]
     # lowest frequency that the embedding should capture.
     f_min: int
     # highest frequency that the embedding should capture.
     f_max: int
     kernel_sec: float
     sequence_length_seconds: float
-
-    def __post_init__(self):
-        assert self.f_max // 2 < min(self.sampling_rates)
-
-
-def lcm2(a: int, b: int) -> int:
-    if a == 0 or b == 0:
-        return 0
-    return abs(a) // gcd(a, b) * abs(b)
-
-
-def lcmN(*nums: int) -> int:
-    return reduce(lcm2, nums, 1)
+    position_index_per_second: int
 
 
 @dataclass
@@ -305,14 +289,6 @@ class ComplexMorletFactory(nn.Module):
         self.kernel_banks = {}
         self.d_model = d_model
         self.data_config = data_config
-        self.check_kernel_banks()
-
-    def check_kernel_banks(self):
-        for sr in self.data_config.sampling_rates:
-            kernel_bank = self.kernel_for_sr(sr)
-            print(f"Kernel bank for sr={sr} has shape {kernel_bank.shape}")
-            if any(kernel_bank.abs().sum(dim=1) == 0):
-                print("WARNING: Some channels have no signal in the kernel bank.")
 
     def kernel_for_sr(
         self,
@@ -363,7 +339,6 @@ class ContinuousSignalEmbedder(nn.Module):
             else SpectrumGridKernelFactory(data_config, d_model)
         )
         self.d_model = d_model
-        self.sr_lcm = lcmN(*data_config.sampling_rates)
         self.out = nn.Linear(d_model, d_model)
 
     def stack_grouped_conv(self, X, k_list):
@@ -491,14 +466,12 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         # TODO: Is this slicing maneuver cheaper than just running the padded signals through the embedder?
         # Could I write a custom kernel that recognises the channel mask and only computes the relevant channels?
         channel_counts = channel_mask.sum(dim=1)
-        if samples_mask is None:
-            # The only time this should be None is when there is only one sampling rate.
-            assert len(self.data_config.sampling_rates) == 1
-            sampling_rates = self.data_config.sampling_rates[0]
-        else:
-            sampling_rates = (
-                samples_mask.sum(dim=1) // self.data_config.sequence_length_seconds
-            )
+        # If there is no mask, assume that all samples have the same sampling rate.
+        sampling_rates = (
+            samples_mask.sum(dim=1) // self.data_config.sequence_length_seconds
+            if samples_mask is not None
+            else T // self.data_config.sequence_length_seconds
+        )
         signals = torch.cat([
             source[i, :channel_count, :]
             for i, channel_count in enumerate(channel_counts)
