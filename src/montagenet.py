@@ -318,9 +318,110 @@ class ComplexMorletFactory(nn.Module):
         return k.contiguous()  # (2*d_model, 1, K)
 
 
+class MAGNetFactory(nn.Module):
+    """
+    1D MAGNet-style kernel generator.
+
+    Each output channel c has K atoms:
+        phi_{c,k}(t) = A_{c,k} * exp(-t^2 / (2*sigma_{c,k}^2)) * cos(2*pi*f_{c,k}*t + phi_{c,k})
+
+    The kernel for channel c is sum_k phi_{c,k}(t), sampled on a grid t that
+    depends on the requested sampling rate (sr) and kernel length (L_K).
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        kernel_length_sec: float,
+        n_atoms: int = 4,
+        init_freq_range_hz=(1.0, 40.0),
+    ):
+        """
+        Args:
+            out_channels: number of output channels (C_out).
+            n_atoms: number of Gabor atoms per output channel.
+            kernel_size: default kernel length (L_K) if not overridden in kernel_for_sr.
+            init_freq_range_hz: tuple (f_min, f_max) for random freq init in Hz.
+            init_sigma_range_s: tuple (s_min, s_max) for random sigma init in seconds.
+        """
+        super().__init__()
+        self.d_model = d_model
+        self.n_atoms = n_atoms
+        self.kernel_length_sec = kernel_length_sec
+
+        # Parameters are per (channel, atom)
+        self.log_amp = nn.Parameter(torch.zeros(d_model, n_atoms))
+        self.log_sigma = nn.Parameter(torch.zeros(d_model, n_atoms))
+        self.log_freq = nn.Parameter(torch.zeros(d_model, n_atoms))
+        self.phase = nn.Parameter(torch.zeros(d_model, n_atoms))
+
+        # Simple random initialization
+        with torch.no_grad():
+            # amplitudes near 1
+            self.log_amp.uniform_(math.log(0.3), math.log(1.0))
+
+            # sigmas (seconds)
+            s_min, s_max = 0.1, kernel_length_sec
+            self.log_sigma.uniform_(math.log(s_min), math.log(s_max))
+
+            # frequencies (Hz)
+            f_min, f_max = init_freq_range_hz
+            self.log_freq.uniform_(math.log(f_min), math.log(f_max))
+
+            # random phases in [-pi, pi]
+            self.phase.uniform_(-math.pi, math.pi)
+
+    def kernel_for_sr(
+        self,
+        sr: int,
+    ) -> torch.Tensor:
+        """
+        Generate a MAGNet kernel matrix for a given sampling rate.
+
+        Args:
+            sr: sampling rate (Hz). Time step is dt = 1/sr.
+
+        Returns:
+            kernel: Tensor of shape (C_out, L_K),
+                    suitable for conv1d as weight = kernel.unsqueeze(1)
+                    (i.e. depthwise conv with C_in = 1).
+        """
+        device = self.log_amp.device
+        L_K = round(self.kernel_length_sec * int(sr))
+
+        # Time grid centered at 0 in *seconds*
+        # t: (1, 1, L_K)
+        center = L_K / 2.0
+        t = (torch.arange(L_K, device=device) - center) / float(sr)
+        t = t.view(1, 1, L_K)
+
+        # Positive amplitudes, sigmas, frequencies
+        amp = F.softplus(self.log_amp)  # (C, K)
+        sigma = F.softplus(self.log_sigma) + 1e-6  # seconds, (C, K)
+        freq = F.softplus(self.log_freq) + 1e-6  # Hz, (C, K)
+        phase = self.phase  # (C, K)
+
+        # Reshape for broadcasting: (C, K, 1)
+        amp = amp.unsqueeze(-1)
+        sigma = sigma.unsqueeze(-1)
+        freq = freq.unsqueeze(-1)
+        phase = phase.unsqueeze(-1)
+
+        # Gaussian envelope: exp(-t^2 / (2*sigma^2))
+        envelope = torch.exp(-0.5 * (t**2) / (sigma**2))  # (C, K, L_K) via broadcasting
+
+        # Cosine wave: cos(2*pi*f*t + phase)
+        wave = torch.cos(2 * math.pi * freq * t + phase)  # (C, K, L_K)
+
+        # Atoms and sum over atoms
+        atoms = amp * envelope * wave  # (C, K, L_K)
+        return atoms.sum(dim=1)  # (C, L_K)
+
+
 class KernelFactoryType(Enum):
     MORLET = "morlet"
     SPECTRUM = "spectrum"
+    MAGNET = "magnet"
 
 
 class ContinuousSignalEmbedder(nn.Module):
@@ -333,11 +434,24 @@ class ContinuousSignalEmbedder(nn.Module):
         super().__init__()
         self.data_config = data_config
         assert d_model % 2 == 0
-        self.kernel_bank_factory = (
-            ComplexMorletFactory(data_config, d_model)
-            if kernel_factory_type == KernelFactoryType.MORLET
-            else SpectrumGridKernelFactory(data_config, d_model)
-        )
+        if kernel_factory_type == KernelFactoryType.MAGNET:
+            self.kernel_bank_factory = MAGNetFactory(
+                d_model,
+                kernel_length_sec=data_config.kernel_sec,
+            )
+        elif kernel_factory_type == KernelFactoryType.MORLET:
+            self.kernel_bank_factory = ComplexMorletFactory(
+                data_config,
+                d_model,
+            )
+        elif kernel_factory_type == KernelFactoryType.SPECTRUM:
+            self.kernel_bank_factory = SpectrumGridKernelFactory(
+                data_config,
+                d_model,
+            )
+        else:
+            raise NotImplementedError(kernel_factory_type)
+
         self.d_model = d_model
         self.out = nn.Linear(d_model, d_model)
 
@@ -361,12 +475,15 @@ class ContinuousSignalEmbedder(nn.Module):
         W = rearrange(
             torch.cat(K_pad, dim=0).to(X.dtype),
             "BC D K -> (BC D) 1 K",  # (BC*d_model,1,K_max)
+            BC=BC,
+            D=self.d_model,
+            K=K_max,
         )
 
         # grouped conv: groups=BC, in_channels=BC, out_channels=BC*d_model
         # Needs to be BC groups because we don't know C.
         # Query: Is this more efficiennt than just padding each input to max channels and then folding into batch dimension and doing a normal conv?
-        Y = F.conv1d(X, W, padding=K_max // 2, groups=BC)  # (1, BC*d_model, T_max)
+        Y = F.conv1d(X, W, padding="same", groups=BC)  # (1, BC*d_model, T_max)
         Y = rearrange(Y, "(BC D) T -> BC T D", BC=BC, D=self.d_model, T=Y.shape[-1])
         return Y
 
@@ -482,6 +599,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             embeddings,
             "B C T D -> (B T) C D",
             B=B,
+            T=T,
             C=C,
             D=self.d_model,
         )
@@ -520,7 +638,6 @@ class SpatioTemporalPerceiverResampler(nn.Module):
             CpL=CpL,
             Rd=self.rope_dim,
         )
-
         for block in self.blocks:
             latents = block(
                 latents,
