@@ -1,7 +1,7 @@
 """Plot random EEG epochs from NumPy memmaps.
 
 Usage example:
-    python misc/inspect_data.py data/sample_eeg.npy --num-epochs 5 --seed 0
+    python misc/inspect_data.py data/sample --num-epochs 5 --seed 0
 """
 
 from __future__ import annotations
@@ -21,15 +21,18 @@ def parse_args() -> argparse.Namespace:
         description="Plot random epochs from EEG NumPy memmaps."
     )
     parser.add_argument(
-        "files",
+        "stubs",
         nargs="+",
-        help="Path(s) to .npy files containing EEG data with shape (n, n_channels, n_samples).",
+        help=(
+            "File stubs that resolve to `<stub>_eeg.npy` and `<stub>_labels.npy` pairs "
+            "with EEG data of shape (n, n_channels, n_samples)."
+        ),
     )
     parser.add_argument(
         "--num-epochs",
         type=int,
         default=3,
-        help="Number of random epochs to plot per file (default: 3).",
+        help="Number of random epochs to plot per label (default: 3).",
     )
     parser.add_argument(
         "--seed",
@@ -50,23 +53,67 @@ def load_memmap(path: Path) -> np.memmap:
     return memmap
 
 
-def sample_random_epochs(
+def load_labels(path: Path) -> np.ndarray:
+    labels = np.load(path)
+    if labels.ndim != 2 or labels.shape[1] < 2:
+        raise ValueError(
+            f"Expected labels with shape (n, 2) in {path}, got shape {labels.shape}"
+        )
+    return labels
+
+
+def resolve_stub_paths(stub: Path) -> tuple[Path, Path]:
+    eeg_path = stub.parent / f"{stub.name}_eeg.npy"
+    label_path = stub.parent / f"{stub.name}_labels.npy"
+    return eeg_path, label_path
+
+
+def sample_balanced_epochs(
     memmap: np.memmap,
+    labels: np.ndarray,
     path: Path,
-    num_plots: int,
+    num_epochs_per_label: int,
     rng: np.random.Generator,
-) -> list[tuple[int, np.ndarray]]:
-    if num_plots <= 0:
+) -> dict[int, list[tuple[int, np.ndarray]]]:
+    if num_epochs_per_label <= 0:
         print(f"Skipping plots for {path} because num-epochs <= 0.")
-        return []
+        return {}
 
-    n_epochs, n_channels, _ = memmap.shape
-    if n_epochs == 0:
-        raise ValueError(f"{path} contains zero epochs.")
+    if memmap.shape[0] != labels.shape[0]:
+        raise ValueError(
+            f"EEG data ({memmap.shape[0]}) and labels ({labels.shape[0]}) have different lengths for {path}."
+        )
 
-    epochs_to_plot = min(num_plots, n_epochs)
-    chosen_indices = rng.choice(n_epochs, size=epochs_to_plot, replace=False)
-    return [(int(index), np.asarray(memmap[index])) for index in chosen_indices]
+    label_column = labels[:, 1]
+    unique_labels = np.unique(label_column)
+    if unique_labels.size == 0:
+        raise ValueError(f"No labels found for {path}.")
+
+    label_indices = {
+        label: np.flatnonzero(label_column == label) for label in unique_labels
+    }
+    per_label = min([
+        num_epochs_per_label,
+        *[len(indices) for indices in label_indices.values()],
+    ])
+    if per_label == 0:
+        raise ValueError(
+            f"Insufficient samples to draw from every class for {path}. "
+            "At least one label has zero samples."
+        )
+    if per_label < num_epochs_per_label:
+        print(
+            f"Requested {num_epochs_per_label} epochs per label for {path}, "
+            f"but the smallest class only has {per_label} samples. Using {per_label} per label."
+        )
+
+    sampled_epochs: dict[int, list[tuple[int, np.ndarray]]] = {}
+    for label, indices in label_indices.items():
+        chosen = rng.choice(indices, size=per_label, replace=False)
+        sampled_epochs[label] = [
+            (int(index), np.asarray(memmap[index])) for index in chosen
+        ]
+    return sampled_epochs
 
 
 def main() -> None:
@@ -74,73 +121,101 @@ def main() -> None:
     script_dir = Path(__file__).resolve().parent
     rng = np.random.default_rng(args.seed)
 
-    dataset_epochs: list[tuple[Path, list[tuple[int, np.ndarray]]]] = []
+    dataset_epochs: list[tuple[Path, dict[int, list[tuple[int, np.ndarray]]]]] = []
     channel_counts: dict[Path, int] = {}
+    observed_labels: set[int] = set()
 
-    for file_path_str in args.files:
-        file_path = Path(file_path_str)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
+    for stub_str in args.stubs:
+        stub_path = Path(stub_str)
+        eeg_path, label_path = resolve_stub_paths(stub_path)
+        if not eeg_path.exists():
+            raise FileNotFoundError(f"EEG file not found: {eeg_path}")
+        if not label_path.exists():
+            raise FileNotFoundError(f"Label file not found: {label_path}")
 
-        memmap = load_memmap(file_path)
-        sampled = sample_random_epochs(memmap, file_path, args.num_epochs, rng)
+        memmap = load_memmap(eeg_path)
+        labels = load_labels(label_path)
+        sampled = sample_balanced_epochs(memmap, labels, eeg_path, args.num_epochs, rng)
         if sampled:
-            dataset_epochs.append((file_path, sampled))
-            channel_counts[file_path] = memmap.shape[1]
+            dataset_epochs.append((eeg_path, sampled))
+            channel_counts[eeg_path] = memmap.shape[1]
+            observed_labels.update(sampled.keys())
 
     if not dataset_epochs:
         print("No epochs sampled; nothing to plot.")
         return
 
-    max_epochs = max(len(epochs) for _, epochs in dataset_epochs)
-    n_rows = len(dataset_epochs)
+    if not observed_labels:
+        print("No labels observed; nothing to plot.")
+        return
 
-    fig, axes = plt.subplots(
-        n_rows,
-        max_epochs,
-        figsize=(12.0 * max_epochs, 3.5 * n_rows),
-        squeeze=False,
-    )
+    label_list = sorted(observed_labels)
+    n_rows = len(label_list)
+    n_cols = args.num_epochs
+    if n_cols <= 0:
+        print("num-epochs must be positive to plot.")
+        return
 
-    for row_idx, (file_path, epochs) in enumerate(dataset_epochs):
-        for col_idx in range(max_epochs):
-            ax = axes[row_idx][col_idx]
-            if col_idx >= len(epochs):
-                ax.axis("off")
-                continue
+    for file_path, samples_by_label in dataset_epochs:
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=(4.5 * n_cols, 3.5 * n_rows),
+            squeeze=False,
+        )
+        n_channels = channel_counts[file_path]
+        for row_idx, label_value in enumerate(label_list):
+            label_samples = samples_by_label.get(label_value, [])
+            for col_idx in range(n_cols):
+                ax = axes[row_idx][col_idx]
+                title_text = "N/A"
+                if col_idx >= len(label_samples):
+                    ax.text(
+                        0.5,
+                        0.5,
+                        "N/A",
+                        ha="center",
+                        va="center",
+                        fontsize="large",
+                        transform=ax.transAxes,
+                    )
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                else:
+                    epoch_index, epoch_data = label_samples[col_idx]
+                    n_samples = epoch_data.shape[-1]
+                    time_axis = np.linspace(0.0, 5.0, num=n_samples, endpoint=False)
+                    for channel_idx in range(n_channels):
+                        ax.plot(
+                            time_axis,
+                            epoch_data[channel_idx],
+                            linewidth=0.9,
+                            alpha=0.7,
+                        )
+                    ax.set_xlim(0.0, 5.0)
+                    title_text = f"Epoch {epoch_index}"
+                    if n_channels <= 10:
+                        ax.legend(
+                            [f"ch {i}" for i in range(n_channels)],
+                            loc="upper right",
+                            fontsize="x-small",
+                        )
 
-            epoch_index, epoch_data = epochs[col_idx]
-            n_channels = channel_counts[file_path]
-            n_samples = epoch_data.shape[-1]
-            time_axis = np.linspace(0.0, 5.0, num=n_samples, endpoint=False)
+                if row_idx == 0:
+                    ax.set_title(title_text, fontsize="small")
+                if col_idx == 0:
+                    ax.set_ylabel(f"Label {label_value}")
+                if row_idx == n_rows - 1:
+                    ax.set_xlabel("Time (s)")
+                else:
+                    ax.set_xticklabels([])
 
-            for channel_idx in range(n_channels):
-                ax.plot(time_axis, epoch_data[channel_idx], linewidth=0.9, alpha=0.7)
-
-            ax.set_xlim(0.0, 5.0)
-            ax.set_title(f"{file_path.name} - epoch {epoch_index}")
-            if col_idx == 0:
-                ax.set_ylabel("Amplitude")
-
-            if n_channels <= 10:
-                ax.legend(
-                    [f"ch {i}" for i in range(n_channels)],
-                    loc="upper right",
-                    fontsize="small",
-                )
-
-        for col_idx in range(max_epochs):
-            ax = axes[row_idx][col_idx]
-            if row_idx == n_rows - 1 and ax.has_data():
-                ax.set_xlabel("Time (s)")
-            elif ax.has_data():
-                ax.set_xticklabels([])
-
-    fig.tight_layout()
-    output_path = script_dir / "combined_epochs.png"
-    fig.savefig(output_path, dpi=150)
-    plt.close(fig)
-    print(f"Saved {output_path}")
+        fig.suptitle(file_path.name, fontsize="large")
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+        output_path = script_dir / f"combined_epochs_{file_path.stem}.png"
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        print(f"Saved {output_path}")
 
 
 if __name__ == "__main__":
