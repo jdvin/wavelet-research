@@ -1,6 +1,8 @@
 import argparse
 from dataclasses import dataclass
 from enum import Enum
+
+from loguru import logger
 import numpy as np
 from scipy import signal
 
@@ -34,7 +36,7 @@ class StreamingSOSFilter:
         y = x.copy()
         for i in range(len(self.sos)):
             y, self.zi[i] = signal.sosfilt(self.sos[i], y, zi=self.zi[i], axis=-1)
-        return x
+        return y
 
 
 def per_channel_median_shift(x: np.ndarray) -> np.ndarray:
@@ -56,7 +58,7 @@ def main(
 ) -> None:
     filter_configs = [
         FilterConfig((1, 60), FilterType.BANDPASS),
-        FilterConfig((49.5, 50.5), FilterType.BANDSTOP),
+        FilterConfig((48.5, 51.5), FilterType.BANDSTOP),
     ]
     filter = StreamingSOSFilter(filter_configs, fs, n_channels)
     x = np.load(input_stub + "_eeg.npy")
@@ -66,22 +68,75 @@ def main(
     epoch_length_samples = int(round(epoch_length_sec * fs))
     epoch_overlap_samples = int(round(epoch_overlap_sec * fs))
     steps = np.arange(0, x.shape[-1], epoch_length_samples - epoch_overlap_samples)
-    x_ = np.memmap(
+    logger.info(
+        f"Filtering {len(steps)} epochs with length {epoch_length_samples} and overlap {epoch_overlap_samples}."
+    )
+    x_ = np.lib.format.open_memmap(
         output_stub + "_eeg.npy",
         mode="w+",
         dtype=x.dtype,
         shape=(len(steps), n_channels, epoch_length_samples),
     )
-    y_ = np.memmap(
+    y_ = np.lib.format.open_memmap(
         output_stub + "_labels.npy",
         mode="w+",
         dtype=y.dtype,
-        shape=(len(y), 2),
+        shape=(len(steps), 2),
     )
-    for i in steps:
-        x_slice = x[:, i : i + epoch_length_samples]
+    for i_out, i_in in enumerate(steps):
+        x_slice = x[:, i_in : i_in + epoch_length_samples]
         y_slice = y.copy()
         x_slice = filter.process(x_slice)
-        x_slice = per_channel_median_shift(x_slice)
-        x_[i, ...] = x_slice
-        y_[i, ...] = y_slice
+        x_slice = per_channel_normalize(x_slice)
+        x_[i_out, ...] = x_slice
+        y_[i_out, ...] = y_slice
+
+    x_.flush()
+    y_.flush()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Filter EEG data.")
+    parser.add_argument(
+        "input_stub",
+        type=str,
+        help="Path stub to the EEG data to be filtered.",
+    )
+    parser.add_argument(
+        "output_stub",
+        type=str,
+        help="Path stub to the filtered EEG data.",
+    )
+    parser.add_argument(
+        "--fs",
+        type=int,
+        default=125,
+        help="Sampling rate of the input EEG data.",
+    )
+    parser.add_argument(
+        "--n-channels",
+        type=int,
+        default=16,
+        help="Number of channels in the input EEG data.",
+    )
+    parser.add_argument(
+        "--epoch-length-sec",
+        type=float,
+        default=5.0,
+        help="Length of each epoch in seconds.",
+    )
+    parser.add_argument(
+        "--epoch-overlap-sec",
+        type=float,
+        default=0.0,
+        help="Overlap between epochs in seconds.",
+    )
+    args = parser.parse_args()
+    main(
+        args.input_stub,
+        args.output_stub,
+        args.fs,
+        args.n_channels,
+        args.epoch_length_sec,
+        args.epoch_overlap_sec,
+    )

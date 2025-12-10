@@ -15,6 +15,8 @@ import numpy as np
 matplotlib.use("Agg")  # Use a non-interactive backend for script execution.
 import matplotlib.pyplot as plt
 
+from misc.filter_stream import main as filter_stream
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -28,6 +30,7 @@ def parse_args() -> argparse.Namespace:
             "with EEG data of shape (n, n_channels, n_samples)."
         ),
     )
+    parser.add_argument("--filter-stream", action="store_true", help="Filter EEG data.")
     parser.add_argument(
         "--num-epochs",
         type=int,
@@ -126,6 +129,17 @@ def main() -> None:
     observed_labels: set[int] = set()
 
     for stub_str in args.stubs:
+        if args.filter_stream:
+            filter_stream(
+                stub_str,
+                stub_str + "_epoched",
+                125,
+                16,
+                5,
+                0,
+            )
+            stub_str = stub_str + "_epoched"
+
         stub_path = Path(stub_str)
         eeg_path, label_path = resolve_stub_paths(stub_path)
         if not eeg_path.exists():
