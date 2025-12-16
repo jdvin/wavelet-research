@@ -54,7 +54,6 @@ def main(
     fs: int,
     n_channels: int,
     epoch_length_sec: float,
-    epoch_overlap_sec: float,
 ) -> None:
     filter_configs = [
         FilterConfig((1, 60), FilterType.BANDPASS),
@@ -66,11 +65,8 @@ def main(
         x = x.squeeze(0)
     y = np.load(input_stub + "_labels.npy")
     epoch_length_samples = int(round(epoch_length_sec * fs))
-    epoch_overlap_samples = int(round(epoch_overlap_sec * fs))
-    steps = np.arange(0, x.shape[-1], epoch_length_samples - epoch_overlap_samples)
-    logger.info(
-        f"Filtering {len(steps)} epochs with length {epoch_length_samples} and overlap {epoch_overlap_samples}."
-    )
+    steps = np.arange(0, x.shape[-1], epoch_length_samples)
+    logger.info(f"Filtering {len(steps)} epochs with length {epoch_length_samples}.")
     x_ = np.lib.format.open_memmap(
         output_stub + "_eeg.npy",
         mode="w+",
@@ -125,12 +121,6 @@ if __name__ == "__main__":
         default=5.0,
         help="Length of each epoch in seconds.",
     )
-    parser.add_argument(
-        "--epoch-overlap-sec",
-        type=float,
-        default=0.0,
-        help="Overlap between epochs in seconds.",
-    )
     args = parser.parse_args()
     main(
         args.input_stub,
@@ -138,5 +128,4 @@ if __name__ == "__main__":
         args.fs,
         args.n_channels,
         args.epoch_length_sec,
-        args.epoch_overlap_sec,
     )

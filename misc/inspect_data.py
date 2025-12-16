@@ -136,7 +136,6 @@ def main() -> None:
                 125,
                 16,
                 5,
-                0,
             )
             stub_str = stub_str + "_epoched"
 
