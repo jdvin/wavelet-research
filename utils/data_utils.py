@@ -2181,6 +2181,7 @@ def get_multi_mapped_label_datasets(
             data_config,
             split.sampling_rate,
             channel_mask,
+            participants=split.subjects,
         )
 
         ds = ret.get(split.split_name, None)

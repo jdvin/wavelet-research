@@ -2,6 +2,7 @@ import os
 from typing import Sequence
 
 import numpy as np
+from loguru import logger
 from pnpl.datasets import LibriBrainCompetitionHoldout, LibriBrainSpeech
 from torch.utils.data import Dataset
 import torch
@@ -41,6 +42,7 @@ class MappedLabelDataset(Dataset):
         data_config: DataConfig,
         sr: int,
         channel_mask: None | list[int] | np.ndarray | torch.Tensor = None,
+        participants: Sequence[str] | None = None,
     ):
         self.labels_map = labels_map
         self.tasks_map = tasks_map
@@ -54,6 +56,18 @@ class MappedLabelDataset(Dataset):
         sample_indexes = torch.arange(0, sr * data_config.sequence_length_seconds)
         self.sequence_positions = (
             sample_indexes / sr * data_config.position_index_per_second
+        )
+        sample_count = len(self.labels)
+        seconds_per_sample = (
+            float(self.inputs.shape[-1]) / sr if sr > 0 and self.inputs.shape else 0.0
+        )
+        total_hours = sample_count * seconds_per_sample / 3600
+        participant_count = len(set(participants)) if participants else None
+        logger.info(
+            "MappedLabelDataset created: participants={}, samples={}, hours_of_eeg={:.2f}",
+            participant_count if participant_count is not None else "unknown",
+            sample_count,
+            total_hours,
         )
 
     def __len__(self):
