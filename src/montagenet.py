@@ -145,8 +145,8 @@ class SpatioTemporalAttentionBlock(nn.Module):
         latents: Tensor,
         source: Tensor,
         T: int,
-        seq_pos: Tensor | None = None,
-        dynamic_rope_freqs: Tensor | None = None,
+        temporal_seq_pos: Tensor | None = None,
+        spatial_rope_freqs: Tensor | None = None,
         spatial_attention_mask: Tensor | None = None,
         temporal_attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
@@ -154,7 +154,7 @@ class SpatioTemporalAttentionBlock(nn.Module):
         latents = self.resampler_block(
             latents,
             source,
-            dynamic_rope_freqs=dynamic_rope_freqs,
+            dynamic_rope_freqs=spatial_rope_freqs,
             attention_mask=spatial_attention_mask,
             kv_cache=kv_cache,
         )
@@ -169,7 +169,7 @@ class SpatioTemporalAttentionBlock(nn.Module):
             latents,
             kv_cache=kv_cache,
             attention_mask=temporal_attention_mask,
-            seq_pos=seq_pos,
+            seq_pos=temporal_seq_pos,
         )
         latents = rearrange(
             latents,
@@ -538,13 +538,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
         temporal_rotary_embedding = RotaryEmbedding(
             dim=rope_dim, cache_max_seq_len=256, freqs_for="pixel"
         )
-        self.embedder = ContinuousSignalEmbedder(
-            data_config,
-            d_model,
-        )
-        self.positions_to_freqs = nn.Sequential(
-            GEGLU(3, d_model, bias=False), nn.Linear(d_model, rope_dim, bias=False)
-        )
+
         self.blocks = nn.ModuleList([
             SpatioTemporalAttentionBlock(
                 d_model,
@@ -562,41 +556,23 @@ class SpatioTemporalPerceiverResampler(nn.Module):
     def forward(
         self,
         source: Tensor,
-        channel_positions: Tensor,
+        spatial_rope_freqs: Tensor,
         sequence_positions: Tensor,
         channel_mask: Tensor | None = None,
         samples_mask: Tensor | None = None,
     ) -> Tensor:
         """
-        source: signals tensor of shape (batch, channels, time).
+        source: Tensor of shape (batch, time, d_model).
         channel_positions: tensor of shape (batch, channels, 3) with the position of each channel in the signal.
         channel_masks: boolean tensor of shape (batch, channels) with True for each channel that should be included in the embedding and spatial attention.
         samples_mask: boolean tensor of shape (batch, samples) with True for each sample that should be included in the embedding.
         """
-        if channel_mask is None:
-            channel_mask = torch.ones(
-                source.size(0), source.size(1), dtype=torch.bool, device=source.device
-            )
 
         B, C, T = source.shape
 
-        # TODO: Is this slicing maneuver cheaper than just running the padded signals through the embedder?
-        # Could I write a custom kernel that recognises the channel mask and only computes the relevant channels?
-        channel_counts = channel_mask.sum(dim=1)
-        # If there is no mask, assume that all samples have the same sampling rate.
-        sampling_rates = (
-            samples_mask.sum(dim=1) // self.data_config.sequence_length_seconds
-            if samples_mask is not None
-            else T // self.data_config.sequence_length_seconds
-        )
-        signals = torch.cat([
-            source[i, :channel_count, :]
-            for i, channel_count in enumerate(channel_counts)
-        ])
-        embeddings = self.embedder(signals, channel_counts, sampling_rates)
         # Perpare source for spatial attention.
         source = rearrange(
-            embeddings,
+            source,
             "B C T D -> (B T) C D",
             B=B,
             T=T,
@@ -629,10 +605,8 @@ class SpatioTemporalPerceiverResampler(nn.Module):
 
         # Pad the freqs with zeros vectors on the left for identity ropes to the query latents.
         # They do not need to be spatially embeded because they are already free parameters.
-        pos_rope_freqs = rearrange(
-            F.pad(
-                self.positions_to_freqs(channel_positions), (0, 0, self.n_latents, 0)
-            ),
+        spatial_rope_freqs = rearrange(
+            F.pad(spatial_rope_freqs, (0, 0, self.n_latents, 0)),
             "B CpL Rd -> (B CpL) Rd",
             B=B,
             CpL=CpL,
@@ -644,7 +618,7 @@ class SpatioTemporalPerceiverResampler(nn.Module):
                 source,
                 T,
                 seq_pos=sequence_positions,
-                dynamic_rope_freqs=pos_rope_freqs,
+                spatial_rope_freqs=spatial_rope_freqs,
                 spatial_attention_mask=channel_mask,
                 temporal_attention_mask=samples_mask,
             )
@@ -748,6 +722,15 @@ class MontageNet(nn.Module):
         self.data_config = config.data_config
         self.n_latents = config.n_latents
         self.d_model = config.d_model
+        self.task_embedding = nn.Embedding(len(config.tasks_map), config.d_model)
+        self.embedder = ContinuousSignalEmbedder(
+            config.data_config,
+            config.d_model,
+        )
+        self.positions_to_freqs = nn.Sequential(
+            GEGLU(3, config.d_model, bias=False),
+            nn.Linear(config.d_model, config.rope_dim, bias=False),
+        )
         self.encoder = SpatioTemporalPerceiverResampler(
             config.data_config,
             config.n_latents,
@@ -798,13 +781,38 @@ class MontageNet(nn.Module):
         samples_mask: Boolean tensor of shape (batch, samples) with True for each sample that should be included in the embedding.
 
         """
+        B, C, T = channel_signals.shape
+        if channel_mask is None:
+            channel_mask = torch.ones(
+                B, C, dtype=torch.bool, device=channel_signals.device
+            )
+        task_tokens = self.task_embedding(task_keys)
+        spatial_rope_freqs = self.positions_to_freqs(channel_positions)
+        # TODO: Is this slicing maneuver cheaper than just running the padded signals through the embedder?
+        # Could I write a custom kernel that recognises the channel mask and only computes the relevant channels?
+        channel_counts = channel_mask.sum(dim=1)
+        # If there is no mask, assume that all samples have the same sampling rate.
+        sampling_rates = (
+            samples_mask.sum(dim=1) // self.data_config.sequence_length_seconds
+            if samples_mask is not None
+            else T // self.data_config.sequence_length_seconds
+        )
+        channel_signals = torch.cat([
+            channel_signals[i, :channel_count, :]
+            for i, channel_count in enumerate(channel_counts)
+        ])
+        signal_embeddings = self.embedder(
+            channel_signals, channel_counts, sampling_rates
+        )
         latents = self.encoder(
-            channel_signals,
+            signal_embeddings,
+            task_tokens,
             channel_positions,
             sequence_positions,
             channel_mask,
             samples_mask,
         )
+
         losses, logits = [], []
         for (
             task_key,

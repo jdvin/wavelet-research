@@ -53,6 +53,8 @@ class MappedLabelDataset(Dataset):
             self.channel_positions = channel_positions[channel_mask]
         else:
             self.channel_positions = channel_positions
+        # Calculate sequence positon in seconds for each sample index
+        # and then multiply by `position_index_per_second` constant.
         sample_indexes = torch.arange(0, sr * data_config.sequence_length_seconds)
         self.sequence_positions = (
             sample_indexes / sr * data_config.position_index_per_second
