@@ -711,6 +711,55 @@ class MontageNetConfig:
         return out
 
 
+class PerceiverResamplerDecoder(nn.Module):
+    def __init__(
+        self,
+        tasks: list[TaskConfig],
+        d_model: int,
+        n_latents: int,
+        n_heads: int,
+        d_mlp: int,
+        dropout: float = 0.0,
+        scale_exponent: float = -0.25,
+    ):
+        super().__init__()
+        self.task_query_embeddings = nn.Embedding(len(tasks), d_model)
+        self.pr_extractor = PerceiverResamplerBlock(
+            d_model,
+            n_heads,
+            d_mlp,
+            None,
+            dropout,
+            scale_exponent,
+        )
+        # TODO: This will be slow, but we can optimise later.
+        self.task_heads = nn.ModuleList([
+            nn.Linear(d_model * n_latents, task.n_classes)
+            for task in tasks
+        ])
+
+    def forward(
+        self,
+        source: Tensor,
+        task_keys: Tensor,
+    ):
+        task_query_embeddings = self.task_query_embeddings(task_keys)
+        latents = self.pr_extractor(
+            source,
+            task_query_embeddings,
+            channel_positions=None,
+            sequence_positions=None,
+            kv_cache=None,
+        )
+        logits = []
+        for (
+            task_key,
+            latent,
+        ) in zip(task_keys, latents):
+            logits.append(self.task_heads[int(task_key.item())](latent))
+        return logits
+
+
 class MontageNet(nn.Module):
     def __init__(
         self,
@@ -743,14 +792,15 @@ class MontageNet(nn.Module):
             config.dropout,
             config.scale_exponent,
         )
-        # TODO: This will be slow, but we can optimise later.
-        self.task_heads = nn.ModuleList([
-            nn.Linear(config.d_model * config.n_latents, task.n_classes)
-            if config.return_latents != ReturnLatents.ALL
-            else nn.Conv1d(config.d_model * config.n_latents, task.n_classes, 1)
-            for task in config.tasks
-        ])
-
+        self.decoder = PerceiverResamplerDecoder(
+            config.tasks,
+            config.d_model,
+            config.n_latents,
+            config.n_heads,
+            config.d_mlp,
+            config.dropout,
+            config.scale_exponent,
+        )
         self.loss = partial(F.cross_entropy, label_smoothing=0.1)
 
     def compute_difficulty(
@@ -793,7 +843,7 @@ class MontageNet(nn.Module):
         channel_counts = channel_mask.sum(dim=1)
         # If there is no mask, assume that all samples have the same sampling rate.
         sampling_rates = (
-            samples_mask.sum(dim=1) // self.data_config.sequence_length_seconds
+            samples_mask.sum(dim=1) // self.data_config.sequ?ence_length_seconds
             if samples_mask is not None
             else T // self.data_config.sequence_length_seconds
         )
@@ -804,7 +854,7 @@ class MontageNet(nn.Module):
         signal_embeddings = self.embedder(
             channel_signals, channel_counts, sampling_rates
         )
-        latents = self.encoder(
+        signal_embeddings = self.encoder(
             signal_embeddings,
             task_tokens,
             channel_positions,
@@ -812,19 +862,8 @@ class MontageNet(nn.Module):
             channel_mask,
             samples_mask,
         )
-
-        losses, logits = [], []
-        for (
-            task_key,
-            latent,
-            label,
-        ) in zip(task_keys, latents, labels):
-            logit = self.task_heads[int(task_key.item())](latent)
-            loss = self.loss(logit.unsqueeze(0), label.unsqueeze(0))
-            logits.append(logit)
-            losses.append(loss)
-        loss = torch.stack(losses).mean()
-        logits = torch.stack(logits)
+        logits = self.decoder(signal_embeddings, task_tokens)
+        loss = self.loss(logits, labels)
         return loss, logits, labels
 
     @property
