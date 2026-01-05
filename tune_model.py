@@ -17,7 +17,7 @@ from pnpl.datasets import LibriBrainSpeech, LibriBrainCompetitionHoldout
 from tqdm import tqdm
 import torch
 
-from utils.data_utils import libri_speech_brain_collate_fn
+from utils.data import libri_speech_brain_collate_fn
 from utils.torch_datasets import (
     LibriBrainSpeechDataset,
 )

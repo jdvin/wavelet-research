@@ -1,0 +1,22 @@
+n_latents: 1
+d_model: 64
+n_heads: 4
+d_mlp: 128
+rope_dim: 8
+dropout: 0.1
+scale_exponent: -0.25
+return_latents: all
+n_blocks: 1
+tasks:
+  - key: move_eyes
+    index: 0
+    labels_map:
+      eyes_open: 0
+      eyes_closed: 1
+data_config:
+  f_min: 0.5
+  f_max: 60
+  kernel_sec: 2.5
+  sequence_length_seconds: 5.0
+  position_index_per_second: 512
+

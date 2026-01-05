@@ -15,7 +15,7 @@ from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
-from utils.data_utils import (
+from utils.data import (
     ds_split_factory,
     mapped_label_ds_collate_fn,
     get_multi_mapped_label_datasets,

@@ -36,6 +36,7 @@ class MappedLabelDataset(Dataset):
         self,
         inputs: np.memmap,
         labels: np.memmap,
+        metadata: np.memmap,
         labels_map: dict[str, int],
         tasks_map: dict[str, int],
         channel_positions: torch.Tensor,
@@ -48,6 +49,7 @@ class MappedLabelDataset(Dataset):
         self.tasks_map = tasks_map
         self.inputs = inputs
         self.labels = labels
+        self.metadata = metadata
         self.channel_mask = channel_mask
         if channel_mask is not None:
             self.channel_positions = channel_positions[channel_mask]
@@ -76,7 +78,8 @@ class MappedLabelDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | int | np.ndarray]:
-        input = self.inputs[index]
+        epoch_length = self.metadata[index]
+        input = self.inputs[index, :epoch_length]
         if self.channel_mask is not None:
             input = input[self.channel_mask]
         task, label = self.labels[index, :]

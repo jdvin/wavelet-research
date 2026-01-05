@@ -734,19 +734,20 @@ class PerceiverResamplerDecoder(nn.Module):
         )
         # TODO: This will be slow, but we can optimise later.
         self.task_heads = nn.ModuleList([
-            nn.Linear(d_model * n_latents, task.n_classes)
-            for task in tasks
+            nn.Linear(d_model * n_latents, task.n_classes) for task in tasks
         ])
 
     def forward(
         self,
         source: Tensor,
         task_keys: Tensor,
+        latents_mask: Tensor | None = None,
     ):
         task_query_embeddings = self.task_query_embeddings(task_keys)
         latents = self.pr_extractor(
             source,
             task_query_embeddings,
+            attention_mask=latents_mask,
             channel_positions=None,
             sequence_positions=None,
             kv_cache=None,
@@ -843,7 +844,7 @@ class MontageNet(nn.Module):
         channel_counts = channel_mask.sum(dim=1)
         # If there is no mask, assume that all samples have the same sampling rate.
         sampling_rates = (
-            samples_mask.sum(dim=1) // self.data_config.sequ?ence_length_seconds
+            samples_mask.sum(dim=1) // self.data_config.sequence_length_seconds
             if samples_mask is not None
             else T // self.data_config.sequence_length_seconds
         )
@@ -856,13 +857,12 @@ class MontageNet(nn.Module):
         )
         signal_embeddings = self.encoder(
             signal_embeddings,
-            task_tokens,
-            channel_positions,
+            spatial_rope_freqs,
             sequence_positions,
             channel_mask,
             samples_mask,
         )
-        logits = self.decoder(signal_embeddings, task_tokens)
+        logits = self.decoder(signal_embeddings, task_tokens, samples_mask)
         loss = self.loss(logits, labels)
         return loss, logits, labels
 
