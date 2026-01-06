@@ -3,6 +3,7 @@ import os
 
 import mne
 import numpy as np
+from loguru import logger
 
 from .common import (
     Annotation,
@@ -310,17 +311,24 @@ def extract_eeg_mmi_split(
     session_info: list[tuple[np.memmap, np.memmap, np.memmap, tuple[int, ...]]] = []
     for subject in split.subjects:
         for session in split.sessions:
-            eeg, label, metadata = extract_eeg_mmi_session_data(
-                base_path,
-                output_path,
-                subject,
-                session,
-                reset_cache,
-                epoch_length_sec=target_epoch_length_sec,
-                sampling_rate=split.sampling_rate,
-                default_event_length_sec=target_epoch_length_sec,
-            )
-            session_info.append((eeg, label, metadata, eeg.shape))
+            # Some MMI data has a different sampling rate?!
+            # We could realistically deal with this by adding sample specific SR to the metadata, but we gotta draw the line somewhere
+            # and it's not that much data. Will reassess if this is common in other datasets.
+            try:
+                eeg, label, metadata = extract_eeg_mmi_session_data(
+                    base_path,
+                    output_path,
+                    subject,
+                    session,
+                    reset_cache,
+                    epoch_length_sec=target_epoch_length_sec,
+                    sampling_rate=split.sampling_rate,
+                    default_event_length_sec=target_epoch_length_sec,
+                )
+                session_info.append((eeg, label, metadata, eeg.shape))
+            except Exception as e:
+                logger.warning(f"Failed to extract session {subject} {session}: {e}")
+                pass
 
     # Calculate total dimensions.
     n_trials = sum(shape[0] for _, _, _, shape in session_info)

@@ -13,6 +13,18 @@ tasks:
     labels_map:
       eyes_open: 0
       eyes_closed: 1
+  - key: move_image_left_right_fist_both_fist_feet
+    index: 1
+    labels_map:
+      rest: 0
+      move_left_fist: 1
+      move_right_fist: 2
+      move_both_fist: 3
+      move_both_feet: 4
+      imag_left_fist: 5
+      imag_right_fist: 6
+      imag_both_fist: 7
+      imag_both_feet: 8
 data_config:
   f_min: 0.5
   f_max: 60
