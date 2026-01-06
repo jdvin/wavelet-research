@@ -848,8 +848,9 @@ class MontageNet(nn.Module):
             if samples_mask is not None
             else T // self.data_config.sequence_length_seconds
         )
+        print(channel_counts)
         channel_signals = torch.cat([
-            channel_signals[i, :channel_count, :]
+            rearrange(channel_signals[i, :channel_count, :], "B C T -> (B C) T")
             for i, channel_count in enumerate(channel_counts)
         ])
         signal_embeddings = self.embedder(
